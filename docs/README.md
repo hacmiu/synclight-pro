@@ -9,7 +9,7 @@ for the original Electron/Node app (which used a x64-only `quiklight.node`).
 ## ⚡ Quick start (for the next session)
 
 ```bash
-cd SyncLightPro
+# from the repo root
 swift build -c release            # plain SwiftPM build
 ./build.sh release                # build + assemble .app bundle (+ icon, ad-hoc signed)
 open "build/SyncLight Pro.app"    # run the app
@@ -23,14 +23,15 @@ open "build/SyncLight Pro.app"    # run the app
 ## Project layout
 
 ```
-SyncLightPro/
+.                                  # repo root
 ├── Package.swift                # SwiftPM, executable target "SyncLightPro"
 ├── build.sh                     # builds arm64 .app bundle into build/ (+ icon)
 ├── make_icon.sh                 # PNG/SVG -> .icns icon pipeline
+├── README.md                    # top-level project readme (GitHub landing page)
 ├── Resources/
 │   ├── Info.plist               # bundle Info.plist
 │   ├── SyncLight Pro.png        # app icon source (transparent, preferred)
-│   └── SyncLight Pro.svg        # icon source (fallback if no PNG)
+│   └── menu bar.png             # menu-bar icon
 ├── Sources/SyncLightPro/
 │   ├── App.swift                # @main SwiftUI App, MenuBarExtra + window, AppDelegate
 │   ├── AppModel.swift           # ObservableObject — state + actions (connect, apply*, sync, USB opt, boot)
@@ -44,6 +45,7 @@ SyncLightPro/
 │   ├── GridLayout.swift         # sampling grid: port of original getAspectRatio + getColsAndRows
 │   ├── ScreenColorSampler.swift # ScreenCaptureKit colour sampler (ambilight)
 │   ├── SystemAudioMeter.swift   # realtime audio level for sound-pickup effects
+│   ├── HotPlugMonitor.swift     # USB plug/unplug detection
 │   ├── ColorSwatchButton.swift  # ColorPicker wrapper
 │   └── HueSlider.swift          # HueSlider + GradientSlider
 ├── PROTOCOL.md                  # reverse-engineered HID protocol notes
@@ -52,10 +54,6 @@ SyncLightPro/
     ├── SESSION_HANDOFF.md       # what was done / current state / next steps
     └── DEV_NOTES.md             # gotchas, debugging, how to test without the app
 ```
-
-Legacy: `probe*.swift` at the repo root of `SyncLightPro/` are one-off debug
-scripts from the reverse-engineering phase. They are **not** part of the build
-(only `Sources/SyncLightPro/**` is compiled). Safe to delete later.
 
 ---
 

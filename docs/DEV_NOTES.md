@@ -67,7 +67,7 @@ d.setColor(r:255,g:0,b:0); pump(1.2)
 d.setColor(r:0,g:0,b:255); pump(1.2)
 d.turnOff()
 EOF
-cd SyncLightPro
+# from the repo root
 swiftc -O Sources/SyncLightPro/HIDTransport.swift \
         Sources/SyncLightPro/RobobloqProtocol.swift \
         Sources/SyncLightPro/LightDriver.swift /tmp/main.swift -o /tmp/drvtest
