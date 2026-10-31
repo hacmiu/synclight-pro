@@ -509,26 +509,28 @@ final class AppModel: ObservableObject {
         s.rows = dims.rows
         s.mirrorProvider = { [weak device] in device?.mirrorBox.value ?? false }
 
-        var frameCount = 0
+        let counter = FrameCounter()
         s.onZones = { [weak self, weak device] zones in
             DispatchQueue.main.async {
-                guard let self = self, let device = device, self.syncEnabled else { return }
+                guard let device = device else { return }
+                let compress = self?.usbPowerOptimization ?? true
+                guard self?.syncEnabled ?? false else { return }
                 let packed: [(r: UInt8, g: UInt8, b: UInt8)] = zones.map { z in
                     let c = (r: z.r, g: z.g, b: z.b)
-                    return self.usbPowerOptimization ? AppModel.compress(c) : c
+                    return compress ? AppModel.compress(c) : c
                 }
-                if frameCount % 30 == 0 {
+                let n = counter.next()
+                if n % 30 == 0 {
                     let c = packed.first ?? (0, 0, 0)
-                    NSLog("[Sync] light=\(device.displayName) frame \(frameCount) zones=\(packed.count) first=(\(c.r),\(c.g),\(c.b))")
+                    NSLog("[Sync] light=\(device.displayName) frame \(n) zones=\(packed.count) first=(\(c.r),\(c.g),\(c.b))")
                 }
-                frameCount += 1
                 device.driver.streamScreenZones(packed)
             }
         }
         Task { [weak self, weak device] in
             do {
                 try await s.start()
-                guard let self = self, let device = device else { return }
+                guard let device = device else { return }
                 device.sampler = s
                 device.driver.endEffectOrSync()
                 NSLog("[Sync] started for \(device.displayName)")
@@ -628,6 +630,17 @@ final class AppModel: ObservableObject {
 }
 
 // MARK: - Color helpers
+
+/// Monotonic frame counter for the per-light sampler debug logging.
+final class FrameCounter {
+    private let lock = NSLock()
+    private var n = 0
+    func next() -> Int {
+        lock.lock(); defer { lock.unlock() }
+        defer { n += 1 }
+        return n
+    }
+}
 
 /// Minimal thread-safe Bool (guarded by a lock) for cross-thread flags.
 final class AtomicBool {
