@@ -1,0 +1,19 @@
+# ─── Local / OS junk ───
+.DS_Store
+**/.DS_Store
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# ─── Reverse-engineering reference kept locally (NOT published) ───
+# Original Electron app, unpacked webpack/node_modules, scratch copies.
+/_legacy/
+
+# ─── Build artifacts & one-off debug scripts ───
+.build/
+build/
+.swiftpm/
+*.xcodeproj/
+probe*.swift
+
