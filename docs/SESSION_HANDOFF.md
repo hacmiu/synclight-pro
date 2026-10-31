@@ -10,8 +10,9 @@
 The app is **feature-complete and usable**: connect + color + brightness +
 effects + off + **screen ambilight** + **sound-pickup** all work on real
 hardware, with a **cyberpunk UI**, **USB Power Optimization**, **Start on boot**,
-a **bundled app icon**, an **adaptive LED grid** (any strip length) and
-**monitor selection**. Single light only. Remaining work is multi-light + BLE.
+a **bundled app icon**, an **adaptive LED grid** (any strip length),
+**monitor selection**, and **multi-light control** (several lights, each bound to
+its own display with its own settings/effects). Remaining work is BLE.
 
 ---
 
@@ -135,23 +136,49 @@ If Node lights the lamp but Swift doesn't → re-check the 5 requirements above.
 - ✅ **Monitor selection** — `ScreenColorSampler.displayID` targets the chosen
   display; `AppModel.selectedDisplayID` (persisted) + SyncPage dropdown +
   `restartSync()` on change. (`availableDisplays()` lists screens, main first.)
+- ✅ **Multi-light control (Part C)** — see the section below.
+
+## Multi-light control (Part C) — DONE
+
+`AppModel` now holds `[LightDevice]` (new `LightDevice.swift`) instead of a
+single `driver` + `sampler`. Each `LightDevice` owns its own `HIDTransport`,
+`LightDriver`, `ScreenColorSampler`, `displayID`, and its **own** settings
+(hue, saturation, brightness, speed, sensitivity, direction, auto-off, last
+effect). Highlights:
+
+- **`HIDTransport`** — added `enumerateEntries()` (each device + its live
+  registry entry), `openSpecific(_:)` (open one specific entry, consuming the
+  handle) and `releaseEntry(for:)`. `openFirstLight()` is now a thin wrapper.
+  The five hard DEV_NOTES requirements are unchanged (IORegistry open, custom
+  `SYNCLIGHT_HID_<ptr>` run-loop mode, 64-byte input buffer, report-id-0 write).
+  `DeviceInfo` gained `locationID` (`kIOHIDLocationIDKey`) as an identity key.
+- **`LightDriver`** — added `connectOnOpenedTransport()` (connect assuming the
+  transport already opened a specific device) and `identityKey` (uuid-based).
+- **`AppModel`** — `connect()` (first free light), `connectAll()` (every
+  enumerated light), per-light `disconnect(_:)`; commands act on the
+  **selected** light (`selectedDevice`, `select(_:)`). The sync toggle is global
+  and starts **one sampler per connected light**, each toward that light's own
+  display with its own grid + direction; `setDisplay(_:for:)` restarts a single
+  light's sampler live. Hot-plug prunes only the removed light by locationID.
+- **Persistence** — per-light settings + display binding are stored as a JSON
+  map in `pref.perLightSettings`, keyed by `uuid:` (once reported) else
+  `loc:<locationID>`. First-run adopts the legacy `pref.selectedDisplayID`.
+- **UI** — SyncPage shows one **card per connected light** (name, LED count,
+  display dropdown, strip direction, disconnect). Color / Effects / Settings
+  pages gained a `LightPicker` header (shown only with ≥2 lights) and edit the
+  selected light. Header button is Connect / Disconnect all; footer shows the
+  connected-light count when >1. Single-light behavior is unchanged.
 
 ## REMAINING (roadmap)
 
-1. **Multi-light control** (biggest change). Currently `AppModel` holds ONE
-   `driver` + ONE `sampler`. To support several lights each on their own screen:
-   - `HIDTransport`: add `open(path:)` (open a specific registry entry) instead
-     of only `openFirstLight()`; enumerate multiple devices.
-   - `AppModel`: hold `[LightDriver]` with a per-light `displayID`; run one
-     `ScreenColorSampler` per distinct display and route each strip's colours to
-     its driver.
-   - UI: per-light cards to bind a light ↔ a monitor.
-2. **BLE / dongle / serial support** — needs the 20-byte MAC frame path
+1. **BLE / dongle / serial support** — needs the 20-byte MAC frame path
    (`PROTOCOL.md`, builder 62564). Not implemented.
-3. **Fine-tune the effects table** in `Pages.swift`
+2. **Fine-tune the effects table** in `Pages.swift`
    (`applyEffect(type:index:)` → `setLedEffect`, action 133). Confirm each entry
    maps to the intended on-device effect; adjust `type`/`index` if a device
    disagrees.
+3. **Multi-light polish** — e.g. reorderable/renamable lights, an optional
+   "apply to all lights" shortcut, per-light screen-sync FPS. Not started.
 4. **Cleanup:** remove debug `probe*.swift` scripts once satisfied.
 5. **Packaging:** proper `Info.plist` versioning, notarized release.
 
@@ -162,4 +189,5 @@ If Node lights the lamp but Swift doesn't → re-check the 5 requirements above.
 - `Sources/SyncLightPro/HIDTransport.swift` — transport (be careful, see DEV_NOTES)
 - `Sources/SyncLightPro/RobobloqProtocol.swift` — frame formats
 - `Sources/SyncLightPro/ScreenColorSampler.swift` — ambilight source
-- `Sources/SyncLightPro/Pages.swift` — effects table lives here
+- `Sources/SyncLightPro/LightDevice.swift` — one light = driver + sampler + settings
+- `Sources/SyncLightPro/Pages.swift` — pages per-light; effects table lives here

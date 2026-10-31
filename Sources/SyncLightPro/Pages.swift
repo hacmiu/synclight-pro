@@ -1,109 +1,160 @@
 import SwiftUI
 
+// MARK: - Light picker (shared header for per-light pages)
+
+/// Horizontal strip of small buttons to choose which light the Color / Effects
+/// / Settings pages edit. Hidden when there are 0 or 1 lights (single-light
+/// behaves exactly like before).
+struct LightPicker: View {
+    @EnvironmentObject var model: AppModel
+
+    var body: some View {
+        let l = model.l10n
+        let connected = model.devices.filter { $0.isConnected }
+        if connected.count > 1 {
+            HStack(spacing: 8) {
+                Image(systemName: "lightbulb.2").foregroundStyle(Cyber.cyan)
+                Text(l.activeLight)
+                    .font(.system(.caption, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(Cyber.textDim)
+                ForEach(connected) { device in
+                    let selected = (model.selectedDevice?.id == device.id)
+                    Button {
+                        model.select(device)
+                    } label: {
+                        HStack(spacing: 6) {
+                            Circle().fill(Cyber.green).frame(width: 7, height: 7)
+                            Text(device.displayName)
+                                .font(.system(.caption, design: .monospaced).weight(.bold))
+                                .foregroundStyle(selected ? Cyber.text : Cyber.textDim)
+                        }
+                        .padding(.horizontal, 10).padding(.vertical, 6)
+                        .background(
+                            RoundedRectangle(cornerRadius: 8)
+                                .fill(selected ? Cyber.cyan.opacity(0.15) : Cyber.panel.opacity(0.6))
+                        )
+                        .overlay(
+                            RoundedRectangle(cornerRadius: 8)
+                                .strokeBorder(selected ? Cyber.cyan.opacity(0.8) : Color.clear, lineWidth: 1)
+                        )
+                    }
+                    .buttonStyle(.plain)
+                }
+                Spacer()
+            }
+        }
+    }
+}
+
 // MARK: - Color page
 struct ColorPage: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
         let l = model.l10n
+        let device = model.selectedDevice
         VStack(alignment: .leading, spacing: 20) {
             CyberSectionTitle(text: l.tabColor, color: Cyber.magenta)
+            LightPicker()
 
-            // Current color swatch — clicking it opens the system color palette.
-            HStack(spacing: 16) {
-                ColorSwatchButton(
-                    color: NSColor(model.color).usingColorSpace(.deviceRGB) ?? .blue,
-                    onChange: { ns in
-                        model.setColor(Color(nsColor: ns))
-                    }
-                ) {
-                    RoundedRectangle(cornerRadius: 12)
-                        .fill(model.color)
-                        .frame(width: 80, height: 80)
-                        .shadow(radius: 4)
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 12)
-                                .stroke(.white.opacity(0.3), lineWidth: 1)
-                        )
-                        .overlay(alignment: .bottomTrailing) {
-                            Image(systemName: "eyedropper")
-                                .font(.system(size: 14, weight: .bold))
-                                .foregroundStyle(.white)
-                                .padding(6)
-                                .background(Circle().fill(.black.opacity(0.45)))
-                                .padding(6)
+            if let device = device {
+                // Current color swatch — clicking it opens the system color palette.
+                HStack(spacing: 16) {
+                    ColorSwatchButton(
+                        color: NSColor(device.color).usingColorSpace(.deviceRGB) ?? .blue,
+                        onChange: { ns in
+                            model.setColor(Color(nsColor: ns))
                         }
-                }
-                .frame(width: 80, height: 80)
-                .help(l.pickColor)
+                    ) {
+                        RoundedRectangle(cornerRadius: 12)
+                            .fill(device.color)
+                            .frame(width: 80, height: 80)
+                            .shadow(radius: 4)
+                            .overlay(
+                                RoundedRectangle(cornerRadius: 12)
+                                    .stroke(.white.opacity(0.3), lineWidth: 1)
+                            )
+                            .overlay(alignment: .bottomTrailing) {
+                                Image(systemName: "eyedropper")
+                                    .font(.system(size: 14, weight: .bold))
+                                    .foregroundStyle(.white)
+                                    .padding(6)
+                                    .background(Circle().fill(.black.opacity(0.45)))
+                                    .padding(6)
+                            }
+                    }
+                    .frame(width: 80, height: 80)
+                    .help(l.pickColor)
 
-                VStack(alignment: .leading, spacing: 6) {
-                    Text(l.pickColor)
-                        .font(.system(.headline, design: .monospaced).weight(.bold))
-                        .foregroundStyle(Cyber.text)
-                    Text(model.color.hexString)
-                        .font(.system(.title3, design: .monospaced).weight(.bold))
-                        .neonText(Cyber.magenta, radius: 6)
-                    Text("\(l.brightness): \(Int(model.brightness))%")
-                        .font(.system(.caption, design: .monospaced))
-                        .foregroundStyle(Cyber.textDim)
-                }
-                Spacer()
-            }
-
-            Divider().overlay(Cyber.magenta.opacity(0.3))
-
-            // Hue slider (rainbow bar) — mirrors the original app's AlphaPicker
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Image(systemName: "paintpalette").foregroundStyle(Cyber.magenta)
-                    Text(l.hue).font(.system(.callout, design: .monospaced).weight(.semibold)).foregroundStyle(Cyber.text)
+                    VStack(alignment: .leading, spacing: 6) {
+                        Text(l.pickColor)
+                            .font(.system(.headline, design: .monospaced).weight(.bold))
+                            .foregroundStyle(Cyber.text)
+                        Text(device.color.hexString)
+                            .font(.system(.title3, design: .monospaced).weight(.bold))
+                            .neonText(Cyber.magenta, radius: 6)
+                        Text("\(l.brightness): \(Int(device.brightness))%")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(Cyber.textDim)
+                    }
                     Spacer()
-                    Text("\(Int(model.hue * 360))°").font(.system(.callout, design: .monospaced)).foregroundStyle(Cyber.cyan)
                 }
-                HueSlider(hue: Binding(
-                    get: { model.hue },
-                    set: { model.hue = $0 }
-                ), onChange: { model.applyColor() })
-            }
 
-            // Saturation slider — gradient from white (0) to full colour (1) at
-            // the current hue, so pastel / desaturated colours can be picked.
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Image(systemName: "circle.lefthalf.filled").foregroundStyle(Cyber.purple)
-                    Text(l.saturation).font(.system(.callout, design: .monospaced).weight(.semibold)).foregroundStyle(Cyber.text)
-                    Spacer()
-                    Text("\(Int(model.saturation * 100))%").font(.system(.callout, design: .monospaced)).foregroundStyle(Cyber.cyan)
+                Divider().overlay(Cyber.magenta.opacity(0.3))
+
+                // Hue slider (rainbow bar) — mirrors the original app's AlphaPicker
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "paintpalette").foregroundStyle(Cyber.magenta)
+                        Text(l.hue).font(.system(.callout, design: .monospaced).weight(.semibold)).foregroundStyle(Cyber.text)
+                        Spacer()
+                        Text("\(Int(device.hue * 360))°").font(.system(.callout, design: .monospaced)).foregroundStyle(Cyber.cyan)
+                    }
+                    HueSlider(hue: Binding(
+                        get: { device.hue },
+                        set: { device.hue = $0 }
+                    ), onChange: { model.applyColor() })
                 }
-                GradientSlider(
-                    value: Binding(
-                        get: { model.saturation },
-                        set: { model.saturation = $0 }
-                    ),
-                    colors: [
-                        Color(hue: model.hue, saturation: 0, brightness: 1),
-                        Color(hue: model.hue, saturation: 1, brightness: 1)
-                    ],
-                    thumbColor: Color(hue: model.hue, saturation: model.saturation, brightness: 1),
-                    onChange: { model.applyColor() }
-                )
-            }
 
-            Divider().overlay(Cyber.magenta.opacity(0.3))
-
-            // Brightness
-            VStack(alignment: .leading, spacing: 8) {
-                HStack {
-                    Image(systemName: "sun.max").foregroundStyle(Cyber.yellow)
-                    Text(l.brightness).font(.system(.callout, design: .monospaced).weight(.semibold)).foregroundStyle(Cyber.text)
-                    Spacer()
-                    Text("\(Int(model.brightness))%").font(.system(.callout, design: .monospaced)).foregroundStyle(Cyber.cyan)
+                // Saturation slider — gradient from white (0) to full colour (1).
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "circle.lefthalf.filled").foregroundStyle(Cyber.purple)
+                        Text(l.saturation).font(.system(.callout, design: .monospaced).weight(.semibold)).foregroundStyle(Cyber.text)
+                        Spacer()
+                        Text("\(Int(device.saturation * 100))%").font(.system(.callout, design: .monospaced)).foregroundStyle(Cyber.cyan)
+                    }
+                    GradientSlider(
+                        value: Binding(
+                            get: { device.saturation },
+                            set: { device.saturation = $0 }
+                        ),
+                        colors: [
+                            Color(hue: device.hue, saturation: 0, brightness: 1),
+                            Color(hue: device.hue, saturation: 1, brightness: 1)
+                        ],
+                        thumbColor: Color(hue: device.hue, saturation: device.saturation, brightness: 1),
+                        onChange: { model.applyColor() }
+                    )
                 }
-                Slider(value: Binding(
-                    get: { model.brightness },
-                    set: { model.brightness = $0; model.applyBrightness() }
-                ), in: 0...100).tint(Cyber.yellow)
+
+                Divider().overlay(Cyber.magenta.opacity(0.3))
+
+                // Brightness
+                VStack(alignment: .leading, spacing: 8) {
+                    HStack {
+                        Image(systemName: "sun.max").foregroundStyle(Cyber.yellow)
+                        Text(l.brightness).font(.system(.callout, design: .monospaced).weight(.semibold)).foregroundStyle(Cyber.text)
+                        Spacer()
+                        Text("\(Int(device.brightness))%").font(.system(.callout, design: .monospaced)).foregroundStyle(Cyber.cyan)
+                    }
+                    Slider(value: Binding(
+                        get: { device.brightness },
+                        set: { device.brightness = $0; model.applyBrightness() }
+                    ), in: 0...100).tint(Cyber.yellow)
+                }
+            } else {
+                Text(l.noLights).font(.system(.callout, design: .monospaced)).foregroundStyle(Cyber.textDim)
             }
         }
     }
@@ -137,11 +188,12 @@ struct EffectsPage: View {
 
     var body: some View {
         let l = model.l10n
+        let device = model.selectedDevice
         VStack(alignment: .leading, spacing: 20) {
             CyberSectionTitle(text: l.tabEffects, color: Cyber.purple)
+            LightPicker()
 
-            // Mode switch: dynamic (type 2) vs sound-pickup (type 3), matching
-            // the original app's 幻彩/拾音 effect groups.
+            // Mode switch: dynamic (type 2) vs sound-pickup (type 3).
             CyberSegmented(options: Group.allCases,
                            title: { $0.title(l) },
                            selection: $group,
@@ -178,25 +230,28 @@ struct EffectsPage: View {
                         .shadow(color: Cyber.purple.opacity(0.35), radius: 10)
                     }
                     .buttonStyle(.plain)
+                    .disabled(device == nil)
                 }
             }
 
             Divider().overlay(Cyber.purple.opacity(0.3))
 
-            // Speed only affects colour effects; sound-pickup follows the audio.
-            if group == .dynamic {
-                sliderRow(icon: "speedometer", title: l.dynamicSpeed, value: Binding(
-                    get: { model.dynamicSpeed },
-                    set: { model.dynamicSpeed = $0; model.applySpeed() }
-                ), range: 5...100)
-            }
+            if let device = device {
+                // Speed only affects colour effects; sound-pickup follows the audio.
+                if group == .dynamic {
+                    sliderRow(icon: "speedometer", title: l.dynamicSpeed, value: Binding(
+                        get: { device.dynamicSpeed },
+                        set: { device.dynamicSpeed = $0; model.applySpeed() }
+                    ), range: 5...100)
+                }
 
-            // Sound sensitivity only matters for the sound-pickup group.
-            if group == .pickup {
-                sliderRow(icon: "ear", title: l.soundSensitivity, value: Binding(
-                    get: { model.soundSensitivity },
-                    set: { model.soundSensitivity = $0; model.applySoundSensitivity() }
-                ), range: 5...100)
+                // Sound sensitivity only matters for the sound-pickup group.
+                if group == .pickup {
+                    sliderRow(icon: "ear", title: l.soundSensitivity, value: Binding(
+                        get: { device.soundSensitivity },
+                        set: { device.soundSensitivity = $0; model.applySoundSensitivity() }
+                    ), range: 5...100)
+                }
             }
         }
     }
@@ -236,6 +291,7 @@ struct SyncPage: View {
                 .font(.system(.callout, design: .monospaced))
                 .foregroundStyle(Cyber.textDim)
 
+            // Global sync toggle — starts/stops a sampler for every light.
             Toggle(isOn: Binding(
                 get: { model.syncEnabled },
                 set: { on in on ? model.startSync() : model.stopSync() }
@@ -258,39 +314,19 @@ struct SyncPage: View {
                 Slider(value: $model.syncFPS, in: 5...60, step: 1).tint(Cyber.cyan)
             }
 
-            // Target display: which monitor this strip should mirror. Lets
-            // several lights each follow their own screen.
-            let displays = AppModel.availableDisplays()
-            if displays.count > 1 {
-                HStack {
-                    Image(systemName: "display").foregroundStyle(Cyber.cyan)
-                    Text(l.display).font(.system(.callout, design: .monospaced).weight(.semibold)).foregroundStyle(Cyber.text)
-                    Spacer()
-                    CyberDropdown(
-                        options: displays.map { $0.id },
-                        title: { id in
-                            displays.first(where: { $0.id == id })?.name ?? l.mainDisplay
-                        },
-                        selection: Binding(
-                            get: { model.selectedDisplayID ?? CGMainDisplayID() },
-                            set: { model.selectedDisplayID = ($0 == CGMainDisplayID()) ? nil : $0 }
-                        ),
-                        accent: Cyber.cyan,
-                        width: 240
-                    )
-                }
-            }
+            Divider().overlay(Cyber.cyan.opacity(0.3))
 
-            // Strip direction (mirrors the original app's installation method).
-            HStack {
-                Image(systemName: "arrow.left.arrow.right").foregroundStyle(Cyber.magenta)
-                Text(l.direction).font(.system(.callout, design: .monospaced).weight(.semibold)).foregroundStyle(Cyber.text)
-                Spacer()
-                CyberSegmented(options: [0, 1],
-                               title: { $0 == 0 ? l.leftToRight : l.rightToLeft },
-                               selection: $model.installationMethod,
-                               accent: Cyber.magenta,
-                               width: 260)
+            // Per-light cards: bind each light to a monitor + strip direction.
+            let connected = model.devices.filter { $0.isConnected }
+            if connected.isEmpty {
+                Text(l.noLights).font(.system(.callout, design: .monospaced)).foregroundStyle(Cyber.textDim)
+            } else {
+                Text(l.displayOfAll)
+                    .font(.system(.caption, design: .monospaced).weight(.semibold))
+                    .foregroundStyle(Cyber.textDim)
+                ForEach(connected) { device in
+                    LightCard(device: device)
+                }
             }
 
             Text(l.screenPermission)
@@ -307,16 +343,83 @@ struct SyncPage: View {
     }
 }
 
+/// One card per connected light in the Sync page: display binding + strip
+/// direction + connect/disconnect. Takes the `LightDevice` directly so its
+/// controls survive the per-frame `objectWillChange` republishes.
+struct LightCard: View {
+    @EnvironmentObject var model: AppModel
+    let device: LightDevice
+
+    var body: some View {
+        let l = model.l10n
+        let displays = AppModel.availableDisplays()
+        VStack(alignment: .leading, spacing: 10) {
+            HStack(spacing: 10) {
+                Circle().fill(Cyber.green).frame(width: 9, height: 9)
+                    .shadow(color: Cyber.green.opacity(0.8), radius: 5)
+                Text(device.displayName)
+                    .font(.system(.callout, design: .monospaced).weight(.bold))
+                    .foregroundStyle(Cyber.text)
+                Text("\(l.leds): \(device.ledCount)")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(Cyber.textDim)
+                Spacer()
+                Button(l.disconnect) { model.disconnect(device) }
+                    .buttonStyle(CyberButtonStyle(color: Cyber.magenta))
+            }
+
+            HStack {
+                Image(systemName: "display").foregroundStyle(Cyber.cyan)
+                Text(l.display).font(.system(.caption, design: .monospaced).weight(.semibold)).foregroundStyle(Cyber.text)
+                Spacer()
+                if displays.count > 1 {
+                    CyberDropdown(
+                        options: displays.map { $0.id },
+                        title: { id in displays.first(where: { $0.id == id })?.name ?? l.mainDisplay },
+                        selection: Binding(
+                            get: { device.displayID ?? CGMainDisplayID() },
+                            set: { model.setDisplay($0 == CGMainDisplayID() ? nil : $0, for: device) }
+                        ),
+                        accent: Cyber.cyan,
+                        width: 220
+                    )
+                } else {
+                    Text(l.mainDisplay).font(.system(.caption, design: .monospaced)).foregroundStyle(Cyber.cyan)
+                }
+            }
+
+            HStack {
+                Image(systemName: "arrow.left.arrow.right").foregroundStyle(Cyber.magenta)
+                Text(l.direction).font(.system(.caption, design: .monospaced).weight(.semibold)).foregroundStyle(Cyber.text)
+                Spacer()
+                CyberSegmented(options: [0, 1],
+                               title: { $0 == 0 ? l.leftToRight : l.rightToLeft },
+                               selection: Binding(
+                                   get: { device.installationMethod },
+                                   set: { device.installationMethod = $0; device.mirrorBox.value = ($0 == 1); model.persist(device) }
+                               ),
+                               accent: Cyber.magenta,
+                               width: 240)
+            }
+        }
+        .padding(14)
+        .background(RoundedRectangle(cornerRadius: 14).fill(Cyber.panel.opacity(0.8)))
+        .overlay(RoundedRectangle(cornerRadius: 14).strokeBorder(Cyber.cyan.opacity(0.4), lineWidth: 1))
+    }
+}
+
 // MARK: - Settings page
 struct SettingsPage: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
         let l = model.l10n
+        let device = model.selectedDevice
         VStack(alignment: .leading, spacing: 20) {
             CyberSectionTitle(text: l.tabSettings, color: Cyber.yellow)
+            LightPicker()
 
-            // Language
+            // Language (global)
             HStack {
                 Image(systemName: "globe").foregroundStyle(Cyber.yellow)
                 Text(l.language).font(.system(.callout, design: .monospaced).weight(.semibold)).foregroundStyle(Cyber.text)
@@ -330,23 +433,33 @@ struct SettingsPage: View {
 
             Divider().overlay(Cyber.yellow.opacity(0.25))
 
-            // Auto off
+            // Auto off — per selected light
             HStack {
                 Image(systemName: "clock").foregroundStyle(Cyber.yellow)
                 Text(l.autoOff).font(.system(.callout, design: .monospaced).weight(.semibold)).foregroundStyle(Cyber.text)
                 Spacer()
-                Toggle("", isOn: $model.autoOffEnabled).labelsHidden().tint(Cyber.yellow)
+                if let device = device {
+                    Toggle("", isOn: Binding(
+                        get: { device.autoOffEnabled },
+                        set: { device.autoOffEnabled = $0; model.applyAutoOff() }
+                    )).labelsHidden().tint(Cyber.yellow)
+                }
             }
-            HStack {
-                Text("\(Int(model.autoOffMinutes)) \(l.minutes)").font(.system(.callout, design: .monospaced)).foregroundStyle(Cyber.cyan)
-                Slider(value: $model.autoOffMinutes, in: 5...120, step: 5).tint(Cyber.yellow)
-                Button(l.apply) { model.applyAutoOff() }
-                    .buttonStyle(CyberButtonStyle(color: Cyber.yellow))
+            if let device = device {
+                HStack {
+                    Text("\(Int(device.autoOffMinutes)) \(l.minutes)").font(.system(.callout, design: .monospaced)).foregroundStyle(Cyber.cyan)
+                    Slider(value: Binding(
+                        get: { device.autoOffMinutes },
+                        set: { device.autoOffMinutes = $0 }
+                    ), in: 5...120, step: 5).tint(Cyber.yellow)
+                    Button(l.apply) { model.applyAutoOff() }
+                        .buttonStyle(CyberButtonStyle(color: Cyber.yellow))
+                }
             }
 
             Divider().overlay(Cyber.yellow.opacity(0.25))
 
-            // USB Power Optimization (mirrors the original isLightCompression).
+            // USB Power Optimization (global)
             HStack {
                 Image(systemName: "bolt.batteryblock").foregroundStyle(Cyber.cyan)
                 VStack(alignment: .leading, spacing: 2) {

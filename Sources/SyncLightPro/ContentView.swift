@@ -84,8 +84,8 @@ struct ContentView: View {
             .padding(.horizontal, 12).padding(.vertical, 6)
             .cyberPanel(corner: 8, border: model.isConnected ? Cyber.green : Cyber.red, glow: 6)
 
-            Button(model.isConnected ? l.disconnect : l.connect) {
-                if model.isConnected { model.disconnect() } else { model.connect() }
+            Button(model.isConnected ? l.disconnectAll : l.connect) {
+                if model.isConnected { model.disconnect() } else { model.connectAll() }
             }
             .buttonStyle(CyberButtonStyle(color: model.isConnected ? Cyber.magenta : Cyber.cyan, prominent: true))
         }
@@ -166,6 +166,13 @@ struct ContentView: View {
                     .foregroundStyle(Cyber.cyan.opacity(0.8))
             }
             Spacer()
+            let connectedCount = model.devices.filter { $0.isConnected }.count
+            if connectedCount > 1 {
+                Text("\(l.lights): \(connectedCount)")
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(Cyber.textDim)
+                Text("//").font(.system(.caption, design: .monospaced)).foregroundStyle(Cyber.textDim)
+            }
             Text("\(l.firmware): \(model.firmware)  //  \(l.leds): \(model.ledCount)")
                 .font(.system(.caption, design: .monospaced))
                 .foregroundStyle(Cyber.textDim)

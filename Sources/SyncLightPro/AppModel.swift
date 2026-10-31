@@ -3,6 +3,11 @@ import SwiftUI
 import ServiceManagement
 
 /// Observable app state bridging UI and device/screen subsystems.
+///
+/// Multi-light (Part C): the app now holds `[LightDevice]`. Each light has its
+/// own settings + its own screen sampler bound to one display. The Color /
+/// Effects / Settings pages act on the *selected* light; the sync toggle is
+/// global and drives every light's sampler toward that light's display.
 @MainActor
 final class AppModel: ObservableObject {
 
@@ -10,96 +15,47 @@ final class AppModel: ObservableObject {
 
     private enum PrefKey {
         static let language = "pref.language"
-        static let hue = "pref.hue"
-        static let saturation = "pref.saturation"
-        static let brightness = "pref.brightness"
-        static let dynamicSpeed = "pref.dynamicSpeed"
-        static let soundSensitivity = "pref.soundSensitivity"
         static let syncFPS = "pref.syncFPS"
-        static let installationMethod = "pref.installationMethod"
-        static let autoOffEnabled = "pref.autoOffEnabled"
-        static let autoOffMinutes = "pref.autoOffMinutes"
         static let usbPowerOptimization = "pref.usbPowerOptimization"
-        static let lastEffectType = "pref.lastEffectType"   // 2/3 = effect group, absent = none
-        static let lastEffectIndex = "pref.lastEffectIndex" // 0..6
-        static let hasUsedLight = "pref.hasUsedLight"       // enables auto-connect
-        static let selectedDisplayID = "pref.selectedDisplayID"
+        static let hasUsedLight = "pref.hasUsedLight"            // enables auto-connect
+        static let selectedDisplayID = "pref.selectedDisplayID"  // legacy single-light
+        /// Per-light settings map: persistenceKey -> encoded LightSettings.
+        static let perLight = "pref.perLightSettings"
     }
 
     @Published var language: AppLanguage = .vi { didSet { save(PrefKey.language, language.rawValue) } }
-    @Published var isConnected = false
     @Published var statusText = ""
 
-    // Live controls
-    @Published var hue: Double = 0.667 { didSet { save(PrefKey.hue, hue) } }          // 0..1 (matches Apple Color .blue)
-    @Published var saturation: Double = 1.0 { didSet { save(PrefKey.saturation, saturation) } } // 0..1 (0 = white/grey, 1 = full colour)
-    @Published var brightness: Double = 80 { didSet { save(PrefKey.brightness, brightness) } }  // 0..100
-
-    /// Swift Color for the current hue + saturation (full value).
-    var color: Color { Color(hue: hue, saturation: saturation, brightness: 1) }
-    @Published var dynamicSpeed: Double = 50 { didSet { save(PrefKey.dynamicSpeed, dynamicSpeed) } }     // 5..100
-    @Published var soundSensitivity: Double = 50 { didSet { save(PrefKey.soundSensitivity, soundSensitivity) } } // 5..100
-
-    // Sync
-    @Published var syncEnabled = false
+    // Global settings (app-wide)
     @Published var syncFPS: Double = 30 { didSet { save(PrefKey.syncFPS, syncFPS) } }
-
-    /// Which display the strip should mirror (CGDirectDisplayID). `nil` = main
-    /// display. Persisted so a chosen monitor survives relaunch.
-    @Published var selectedDisplayID: UInt32? = nil {
-        didSet {
-            if let id = selectedDisplayID {
-                save(PrefKey.selectedDisplayID, Int(id))
-            } else {
-                UserDefaults.standard.removeObject(forKey: PrefKey.selectedDisplayID)
-            }
-            // Restart capture live if sync is running so it follows the change.
-            if syncEnabled { restartSync() }
-        }
-    }
-    /// Strip direction as seen by the viewer facing the screen:
-    /// 0 = the strip runs/animates left→right, 1 = right→left. The light bar is
-    /// always mounted along the vertical axis, so this only chooses which end
-    /// of the bar corresponds to the top or bottom of the screen.
-    @Published var installationMethod = 0 {
-        didSet {
-            mirrorBox.value = installationMethod == 1
-            save(PrefKey.installationMethod, installationMethod)
-        }
-    }
-
-    /// Thread-safe mirror flag read from the sampler's capture queue.
-    private let mirrorBox = AtomicBool(false)
-
-    // Auto off
-    @Published var autoOffEnabled = false { didSet { save(PrefKey.autoOffEnabled, autoOffEnabled) } }
-    @Published var autoOffMinutes: Double = 30 { didSet { save(PrefKey.autoOffMinutes, autoOffMinutes) } }
-
-    // USB Power Optimization (mirrors the original `isLightCompression`).
-    // When on, any colour whose R+G+B exceeds 255 is scaled down to keep total
-    // current within the USB power budget (prevents flicker/over-current).
+    @Published var syncEnabled = false
     @Published var usbPowerOptimization = true { didSet { save(PrefKey.usbPowerOptimization, usbPowerOptimization) } }
-
-    // Start on boot (login item), menu-bar only, no window popup.
     @Published var startOnBoot = false
 
-    // Device meta
-    @Published var firmware = "-"
-    @Published var ledCount = 0
+    // MARK: - Multi-light state
 
-    private let transport = HIDTransport()
-    private var driver: LightDriver?
-    private var sampler: ScreenColorSampler?
-    private var audioMeter: SystemAudioMeter?
+    /// All known lights (connected or not). Persisted display bindings and
+    /// settings are re-applied on connect.
+    @Published var devices: [LightDevice] = []
+
+    /// Id of the light the Color/Effects/Settings pages currently edit.
+    @Published var selectedLightID: UUID?
+
+    /// The selected light, if any (falls back to the first light).
+    var selectedDevice: LightDevice? {
+        if let id = selectedLightID, let d = devices.first(where: { $0.id == id }) { return d }
+        return devices.first
+    }
+
+    /// True when at least one light is connected (drives header badge/menu).
+    var isConnected: Bool { devices.contains { $0.isConnected } }
+
+    /// Convenience for the footer: firmware + LED count of the selected light.
+    var firmware: String { selectedDevice?.firmware ?? "-" }
+    var ledCount: Int { selectedDevice?.ledCount ?? 0 }
+
+    private var audioMeters: [UUID: SystemAudioMeter] = [:]
     private var hotPlug: HotPlugMonitor?
-
-    /// Last effect the user applied (type 2/3, index 0..6), if any.
-    /// Persisted so it can be re-applied after an auto-connect on next launch.
-    private var lastEffectType: UInt8?
-    private var lastEffectIndex: UInt8?
-
-    /// Current effect type in use (2 = dynamic, 3 = sound pickup, nil = none).
-    @Published private(set) var activeEffectType: UInt8?
 
     var l10n: L10n { L10n(lang: language) }
 
@@ -116,36 +72,14 @@ final class AppModel: ObservableObject {
         UserDefaults.standard.set(value, forKey: key)
     }
 
-    /// Load the last-used settings into the published properties. Called once
-    /// from `init()` before the UI observes the object, so the default-value
-    /// `didSet` writers won't clobber the stored values.
     private func restoreSettings() {
         let ud = UserDefaults.standard
-
         if let lang = ud.string(forKey: PrefKey.language), let l = AppLanguage(rawValue: lang) {
             language = l
         }
-        if ud.object(forKey: PrefKey.hue) != nil { hue = clamp(ud.double(forKey: PrefKey.hue), 0, 1) }
-        if ud.object(forKey: PrefKey.saturation) != nil { saturation = clamp(ud.double(forKey: PrefKey.saturation), 0, 1) }
-        if ud.object(forKey: PrefKey.brightness) != nil { brightness = clamp(ud.double(forKey: PrefKey.brightness), 0, 100) }
-        if ud.object(forKey: PrefKey.dynamicSpeed) != nil { dynamicSpeed = clamp(ud.double(forKey: PrefKey.dynamicSpeed), 5, 100) }
-        if ud.object(forKey: PrefKey.soundSensitivity) != nil { soundSensitivity = clamp(ud.double(forKey: PrefKey.soundSensitivity), 5, 100) }
         if ud.object(forKey: PrefKey.syncFPS) != nil { syncFPS = clamp(ud.double(forKey: PrefKey.syncFPS), 5, 60) }
-        installationMethod = ud.integer(forKey: PrefKey.installationMethod)
-        autoOffEnabled = ud.bool(forKey: PrefKey.autoOffEnabled)
-        if ud.object(forKey: PrefKey.autoOffMinutes) != nil { autoOffMinutes = clamp(ud.double(forKey: PrefKey.autoOffMinutes), 5, 120) }
         if ud.object(forKey: PrefKey.usbPowerOptimization) != nil {
             usbPowerOptimization = ud.bool(forKey: PrefKey.usbPowerOptimization)
-        }
-        if ud.object(forKey: PrefKey.lastEffectType) != nil {
-            let t = ud.integer(forKey: PrefKey.lastEffectType)
-            if t == 2 || t == 3 {
-                lastEffectType = UInt8(t)
-                lastEffectIndex = UInt8(clamping: ud.integer(forKey: PrefKey.lastEffectIndex))
-            }
-        }
-        if ud.object(forKey: PrefKey.selectedDisplayID) != nil {
-            selectedDisplayID = UInt32(ud.integer(forKey: PrefKey.selectedDisplayID))
         }
     }
 
@@ -153,15 +87,85 @@ final class AppModel: ObservableObject {
         min(hi, max(lo, v))
     }
 
-    /// Whether the light had been connected in a previous session.
     private var hasUsedLight: Bool {
         UserDefaults.standard.bool(forKey: PrefKey.hasUsedLight)
     }
 
+    // MARK: - Per-light settings persistence
+
+    /// Codable snapshot of one light's settings.
+    private struct LightSettings: Codable {
+        var displayID: UInt32?
+        var hue: Double
+        var saturation: Double
+        var brightness: Double
+        var dynamicSpeed: Double
+        var soundSensitivity: Double
+        var installationMethod: Int
+        var autoOffEnabled: Bool
+        var autoOffMinutes: Double
+        var lastEffectType: UInt8?
+        var lastEffectIndex: UInt8?
+    }
+
+    private func loadPerLightMap() -> [String: LightSettings] {
+        guard let data = UserDefaults.standard.data(forKey: PrefKey.perLight),
+              let map = try? JSONDecoder().decode([String: LightSettings].self, from: data) else {
+            return [:]
+        }
+        return map
+    }
+
+    private func storePerLightMap(_ map: [String: LightSettings]) {
+        if let data = try? JSONEncoder().encode(map) {
+            UserDefaults.standard.set(data, forKey: PrefKey.perLight)
+        }
+    }
+
+    /// Persist one light's current settings under its identity key.
+    func persist(_ device: LightDevice) {
+        var map = loadPerLightMap()
+        map[device.persistenceKey] = LightSettings(
+            displayID: device.displayID,
+            hue: device.hue,
+            saturation: device.saturation,
+            brightness: device.brightness,
+            dynamicSpeed: device.dynamicSpeed,
+            soundSensitivity: device.soundSensitivity,
+            installationMethod: device.installationMethod,
+            autoOffEnabled: device.autoOffEnabled,
+            autoOffMinutes: device.autoOffMinutes,
+            lastEffectType: device.lastEffectType,
+            lastEffectIndex: device.lastEffectIndex
+        )
+        storePerLightMap(map)
+    }
+
+    /// Apply persisted settings (if any) onto a freshly-connected light. Falls
+    /// back to the legacy single-light display selection on first run.
+    private func restoreSettings(for device: LightDevice) {
+        let map = loadPerLightMap()
+        if let s = map[device.persistenceKey] {
+            device.hue = s.hue
+            device.saturation = s.saturation
+            device.brightness = s.brightness
+            device.dynamicSpeed = s.dynamicSpeed
+            device.soundSensitivity = s.soundSensitivity
+            device.installationMethod = s.installationMethod
+            device.autoOffEnabled = s.autoOffEnabled
+            device.autoOffMinutes = s.autoOffMinutes
+            device.lastEffectType = s.lastEffectType
+            device.lastEffectIndex = s.lastEffectIndex
+            device.displayID = s.displayID
+        } else if let legacy = UserDefaults.standard.object(forKey: PrefKey.selectedDisplayID) as? Int,
+                  legacy != 0 {
+            device.displayID = UInt32(legacy)
+        }
+        device.mirrorBox.value = device.installationMethod == 1
+    }
+
     // MARK: - Hot-plug
 
-    /// Watch for the light being plugged in / unplugged. Keeps `isConnected`
-    /// accurate and auto-reconnects when the light comes back.
     private func setupHotPlug() {
         let monitor = HotPlugMonitor()
         monitor.onChanged = { [weak self] present in
@@ -174,91 +178,193 @@ final class AppModel: ObservableObject {
 
     private func handleHotPlug(present: Bool) {
         if present {
-            // Device (re)appeared — reconnect if we were using it and aren't now.
-            if !isConnected && hasUsedLight {
-                autoConnectLastLight()
+            if hasUsedLight { tryAutoReconnectMissing() }
+        } else {
+            pruneDisconnectedLights()
+        }
+    }
+
+    private func pruneDisconnectedLights() {
+        let presentLocations = Set(HIDTransport.enumerate().map { $0.locationID })
+        var removedAny = false
+        for device in devices where device.isConnected {
+            if !presentLocations.contains(device.locationID) {
+                teardownLight(device)
+                removedAny = true
             }
-        } else if isConnected {
-            // Unplugged — drop the stale handle.
-            NSLog("[HotPlug] light removed")
-            stopSync()
-            driver?.disconnect()
-            driver = nil
-            isConnected = false
-            statusText = l10n.noDevice
+        }
+        if removedAny {
+            if !devices.contains(where: { $0.isConnected }) {
+                stopSync()
+                statusText = l10n.noDevice
+            }
+            objectWillChange.send()
         }
     }
 
     // MARK: - Connect
 
+    /// Connect the first available light not already open (single-light flow /
+    /// header "Connect"). Adds it to `devices`.
     func connect() {
-        let d = LightDriver(transport: transport)
-        if d.connect() {
-            driver = d
-            isConnected = true
-            statusText = l10n.connected
-            firmware = d.meta.firmware.isEmpty ? "-" : d.meta.firmware
-            ledCount = d.meta.lampsAmount
-            // Remember the light so the next launch can auto-connect.
-            save(PrefKey.hasUsedLight, true)
-            // Re-apply the restored settings to the freshly connected light.
-            reapplyRestoredSettings()
-        } else {
-            isConnected = false
-            statusText = l10n.noDevice
-        }
+        let entries = HIDTransport.enumerateEntries()
+        guard !entries.isEmpty else { statusText = l10n.noDevice; return }
+        let openLocations = Set(devices.filter { $0.isConnected }.map { $0.locationID })
+        let candidates = entries.filter { !openLocations.contains($0.info.locationID) }
+        // Prefer a vendor interface entry; fall back to any, then the first.
+        let chosen = candidates.first(where: { $0.info.usagePage == 0xFF00 && $0.info.usage == 1 })
+            ?? candidates.first
+            ?? entries.first(where: { $0.info.usagePage == 0xFF00 && $0.info.usage == 1 })
+            ?? entries[0]
+        for e in entries where e.entry != chosen.entry { HIDTransport.releaseEntry(for: e) }
+        addLight(from: chosen)
     }
 
-    /// On launch, if the light was used before and is present, connect silently.
+    /// Connect ALL enumerated lights not already open. Header "Connect all".
+    func connectAll() {
+        let entries = HIDTransport.enumerateEntries()
+        guard !entries.isEmpty else { statusText = l10n.noDevice; return }
+        let openLocations = Set(devices.filter { $0.isConnected }.map { $0.locationID })
+        var byLocation: [Int: [HIDTransport.MatchedEntry]] = [:]
+        for e in entries { byLocation[e.info.locationID, default: []].append(e) }
+
+        for (loc, group) in byLocation {
+            if openLocations.contains(loc) {
+                for e in group { HIDTransport.releaseEntry(for: e) }
+                continue
+            }
+            let chosen = group.first(where: { $0.info.usagePage == 0xFF00 && $0.info.usage == 1 }) ?? group[0]
+            for e in group where e.entry != chosen.entry { HIDTransport.releaseEntry(for: e) }
+            addLight(from: chosen)
+        }
+        if !devices.contains(where: { $0.isConnected }) { statusText = l10n.noDevice }
+    }
+
+    /// Build a LightDevice from a matched entry, open it, restore settings and
+    /// (if used before) push them to the hardware.
+    private func addLight(from entry: HIDTransport.MatchedEntry) {
+        let transport = HIDTransport()
+        guard transport.openSpecific(entry) else {
+            statusText = l10n.noDevice
+            return
+        }
+        let driver = LightDriver(transport: transport)
+        guard driver.connectOnOpenedTransport() else {
+            transport.close()
+            statusText = l10n.noDevice
+            return
+        }
+        let index = devices.count + 1
+        let device = LightDevice(transport: transport, driver: driver,
+                                 locationID: entry.info.locationID,
+                                 displayName: "\(l10n.light) \(index)")
+        device.isConnected = true
+        restoreSettings(for: device)
+        devices.append(device)
+        if selectedLightID == nil { selectedLightID = device.id }
+        save(PrefKey.hasUsedLight, true)
+        statusText = l10n.connected
+        objectWillChange.send()
+
+        reapplyRestoredSettings(for: device)
+        if syncEnabled { startSampler(for: device) }
+    }
+
+    /// On launch, auto-connect lights we've used before that are present.
     func autoConnectLastLight() {
-        guard !isConnected, hasUsedLight else { return }
+        guard hasUsedLight else { return }
         guard !HIDTransport.enumerate().isEmpty else {
             statusText = l10n.noDevice
             return
         }
-        connect()
+        connectAll()
     }
 
-    /// Push the restored (persisted) settings to a just-connected light:
-    /// brightness (+ auto-off) first, then the last effect or the last colour.
-    private func reapplyRestoredSettings() {
-        applyBrightness()
-        if autoOffEnabled { applyAutoOff() }
-        if let type = lastEffectType, let index = lastEffectIndex {
-            applyEffect(type: type, index: index)
+    private func tryAutoReconnectMissing() {
+        guard !HIDTransport.enumerate().isEmpty else { return }
+        connectAll()
+    }
+
+    private func reapplyRestoredSettings(for device: LightDevice) {
+        device.driver.setBrightness(UInt8(max(0, min(255, (device.brightness / 100.0 * 255.0).rounded()))))
+        if device.autoOffEnabled {
+            device.driver.setAutoOff(enable: true, minutes: UInt8(device.autoOffMinutes))
+        }
+        if let type = device.lastEffectType, let index = device.lastEffectIndex {
+            device.driver.setSoundSensitivity(UInt8(device.soundSensitivity))
+            if type == 2 { device.driver.setDynamicSpeed(UInt8(100 - device.dynamicSpeed)) }
+            let rgb = AppModel.compressIfNeeded(device.color.toRGB(), usbPowerOptimization)
+            device.driver.setColor(r: rgb.r, g: rgb.g, b: rgb.b)
+            device.driver.setLedEffect(type: type, index: index)
+            device.activeEffectType = type
+            if type == 3 { device.driver.setComputerRhythm(1); startAudioFeed(for: device) }
         } else {
-            applyColor()
+            let rgb = AppModel.compressIfNeeded(device.color.toRGB(), usbPowerOptimization)
+            device.driver.endEffectOrSync()
+            device.driver.setColor(r: rgb.r, g: rgb.g, b: rgb.b)
         }
     }
+
+    // MARK: - Disconnect
 
     func disconnect() {
         stopSync()
-        driver?.disconnect()
-        driver = nil
-        isConnected = false
+        for device in devices { teardownLight(device) }
+        devices.removeAll()
+        selectedLightID = nil
         statusText = l10n.notConnected
+        objectWillChange.send()
     }
 
-    // MARK: - Color
+    func disconnect(_ device: LightDevice) {
+        removeSampler(for: device)
+        teardownLight(device)
+        devices.removeAll { $0 === device }
+        if selectedLightID == device.id { selectedLightID = devices.first?.id }
+        if !devices.contains(where: { $0.isConnected }) { statusText = l10n.notConnected }
+        objectWillChange.send()
+    }
+
+    private func teardownLight(_ device: LightDevice) {
+        device.sampler?.onZones = nil
+        stopAudioFeed(for: device)
+        device.driver.disconnect()
+        device.isConnected = false
+    }
+
+    // MARK: - Selection
+
+    func select(_ device: LightDevice) {
+        selectedLightID = device.id
+        objectWillChange.send()
+    }
+
+    // MARK: - Color / Brightness / settings (per selected light)
 
     func applyColor() {
-        stopAudioFeed()
-        activeEffectType = nil
-        // A static colour replaces any effect; forget the stored effect so an
-        // auto-connect on next launch restores this colour instead.
-        lastEffectType = nil
-        lastEffectIndex = nil
-        UserDefaults.standard.removeObject(forKey: PrefKey.lastEffectType)
-        driver?.endEffectOrSync()
-        var rgb = color.toRGB()
-        if usbPowerOptimization {
-            rgb = AppModel.compress(rgb)
-        }
-        driver?.setColor(r: rgb.r, g: rgb.g, b: rgb.b)
+        guard let device = selectedDevice else { return }
+        stopAudioFeed(for: device)
+        device.activeEffectType = nil
+        device.lastEffectType = nil
+        device.lastEffectIndex = nil
+        device.driver.endEffectOrSync()
+        var rgb = device.color.toRGB()
+        if usbPowerOptimization { rgb = AppModel.compress(rgb) }
+        device.driver.setColor(r: rgb.r, g: rgb.g, b: rgb.b)
+        persist(device)
+        objectWillChange.send()
     }
 
-    /// USB Power Optimization: scale a colour down so R+G+B <= 255, preserving
-    /// hue (original `isLightCompression` in lowLight/lowLightForSync).
+    /// Set hue/saturation from a picked color on the selected light.
+    func setColor(_ newColor: Color) {
+        guard let device = selectedDevice else { return }
+        let hsb = newColor.toHSB()
+        device.hue = hsb.h
+        device.saturation = hsb.s
+        applyColor()
+    }
+
+    /// USB Power Optimization: scale a colour down so R+G+B <= 255.
     static func compress(_ c: (r: UInt8, g: UInt8, b: UInt8)) -> (r: UInt8, g: UInt8, b: UInt8) {
         let sum = Int(c.r) + Int(c.g) + Int(c.b)
         guard sum > 255 else { return c }
@@ -267,116 +373,105 @@ final class AppModel: ObservableObject {
         return (d(c.r), d(c.g), d(c.b))
     }
 
-    /// Set hue/saturation from an arbitrary picked color (e.g. the ColorPicker),
-    /// keeping the two sliders in sync, then push it to the device.
-    func setColor(_ newColor: Color) {
-        let hsb = newColor.toHSB()
-        hue = hsb.h
-        saturation = hsb.s
-        applyColor()
+    private static func compressIfNeeded(_ c: (r: UInt8, g: UInt8, b: UInt8), _ on: Bool) -> (r: UInt8, g: UInt8, b: UInt8) {
+        on ? compress(c) : c
     }
 
     func applyBrightness() {
-        // 0..100 -> 0..255 (driver clamps minimum to 5, like the original app).
-        driver?.setBrightness(UInt8(max(0, min(255, (brightness / 100.0 * 255.0).rounded()))))
+        guard let device = selectedDevice else { return }
+        device.driver.setBrightness(UInt8(max(0, min(255, (device.brightness / 100.0 * 255.0).rounded()))))
+        persist(device)
     }
 
     func applySpeed() {
-        // The original app inverts the slider value before sending:
-        // deviceSpeed = 100 - slider (slider low = fast, high = slow visually,
-        // but "speed" here reads as 0=slow..100=fast on our UI). We keep our
-        // slider meaning "faster = higher" and invert to the device value.
-        driver?.setDynamicSpeed(UInt8(100 - dynamicSpeed))
+        guard let device = selectedDevice else { return }
+        device.driver.setDynamicSpeed(UInt8(100 - device.dynamicSpeed))
+        persist(device)
     }
 
     func applySoundSensitivity() {
-        driver?.setSoundSensitivity(UInt8(soundSensitivity))
+        guard let device = selectedDevice else { return }
+        device.driver.setSoundSensitivity(UInt8(device.soundSensitivity))
+        persist(device)
     }
 
     func applyEffect(type: UInt8, index: UInt8) {
-        // Leaving screen-sync if it was running so the effect can take over.
-        if syncEnabled { stopSync() }
-        driver?.setSoundSensitivity(UInt8(soundSensitivity))
-        // Dynamic speed only affects colour effects (type 2). Sound-pickup
-        // effects (type 3) follow the audio, so speed is irrelevant for them
-        // (the original app hides the speed slider in pickup mode).
-        if type == 2 {
-            driver?.setDynamicSpeed(UInt8(100 - dynamicSpeed))
-        }
-        driver?.setLedEffect(type: type, index: index)
-        activeEffectType = type
-        // Remember the effect so auto-connect can restore it on next launch.
-        lastEffectType = type
-        lastEffectIndex = index
-        save(PrefKey.lastEffectType, Int(type))
-        save(PrefKey.lastEffectIndex, Int(index))
-        // Sound-pickup effects (type 3) need audio fed from the app; tell the
-        // device to use "computer rhythm" (app-fed) and start capturing system
-        // audio. For other effect types stop any audio feed.
+        guard let device = selectedDevice else { return }
+        if syncEnabled { stopSampler(for: device) }
+        device.driver.setSoundSensitivity(UInt8(device.soundSensitivity))
+        if type == 2 { device.driver.setDynamicSpeed(UInt8(100 - device.dynamicSpeed)) }
+        device.driver.setLedEffect(type: type, index: index)
+        device.activeEffectType = type
+        device.lastEffectType = type
+        device.lastEffectIndex = index
         if type == 3 {
-            driver?.setComputerRhythm(1)
-            startAudioFeed()
+            device.driver.setComputerRhythm(1)
+            startAudioFeed(for: device)
         } else {
-            stopAudioFeed()
+            stopAudioFeed(for: device)
         }
+        persist(device)
+        objectWillChange.send()
     }
 
-    /// Feed system-audio level to the device so type-3 (sound pickup) effects
-    /// react to the music actually playing on the Mac.
-    private func startAudioFeed() {
-        stopAudioFeed()
+    func applyAutoOff() {
+        guard let device = selectedDevice else { return }
+        device.driver.setAutoOff(enable: device.autoOffEnabled, minutes: UInt8(device.autoOffMinutes))
+        persist(device)
+    }
+
+    /// Change which display the selected light mirrors (persisted per light).
+    func setDisplay(_ displayID: UInt32?, for device: LightDevice) {
+        device.displayID = displayID
+        persist(device)
+        if syncEnabled { restartSampler(for: device) }
+        objectWillChange.send()
+    }
+
+    // MARK: - Audio feed (per light)
+
+    private func startAudioFeed(for device: LightDevice) {
+        stopAudioFeed(for: device)
         let meter = SystemAudioMeter()
-        let sens = max(5, min(100, soundSensitivity)) / 100.0
-        meter.noiseFloor = Float(0.02 - 0.017 * sens)   // 0.02 (insensitive) .. 0.003 (very sensitive)
-        meter.gain = Float(0.6 + 2.4 * sens)            // 0.6 .. 3.0
-        meter.onLevel = { [weak self] level in
-            guard let self = self, self.activeEffectType == 3 else { return }
+        let sens = max(5, min(100, device.soundSensitivity)) / 100.0
+        meter.noiseFloor = Float(0.02 - 0.017 * sens)
+        meter.gain = Float(0.6 + 2.4 * sens)
+        meter.onLevel = { [weak device] level in
+            guard let device = device, device.activeEffectType == 3 else { return }
             let scaled = UInt16(max(0, min(65535, level * 65535.0)))
-            self.driver?.setExternalAudio(level: scaled)
+            device.driver.setExternalAudio(level: scaled)
         }
-        audioMeter = meter
-        Task { [weak self] in
-            do {
-                try await meter.start()
-            } catch {
+        audioMeters[device.id] = meter
+        Task {
+            do { try await meter.start() }
+            catch {
                 await MainActor.run {
-                    self?.activeEffectType = nil
-                    self?.statusText = self?.l10n.screenPermission ?? ""
+                    device.activeEffectType = nil
+                    self.statusText = self.l10n.screenPermission
                 }
             }
         }
     }
 
-    private func stopAudioFeed() {
-        let meter = audioMeter
-        audioMeter = nil
+    private func stopAudioFeed(for device: LightDevice) {
+        let meter = audioMeters.removeValue(forKey: device.id)
         Task { await meter?.stop() }
-    }
-
-    func applyAutoOff() {
-        driver?.setAutoOff(enable: autoOffEnabled, minutes: UInt8(autoOffMinutes))
     }
 
     // MARK: - Start on boot (login item)
 
-    /// Reflect the current login-item registration state into `startOnBoot`.
     func refreshStartOnBoot() {
         if #available(macOS 13.0, *) {
             startOnBoot = SMAppService.mainApp.status == .enabled
         }
     }
 
-    /// Register/unregister the app as a login item. When enabled the app is
-    /// launched at login in menu-bar-only mode (see App.swift auto-open guard).
     func setStartOnBoot(_ enabled: Bool) {
         UserDefaults.standard.set(enabled, forKey: "startOnBoot")
         if #available(macOS 13.0, *) {
             do {
-                if enabled {
-                    try SMAppService.mainApp.register()
-                } else {
-                    try SMAppService.mainApp.unregister()
-                }
+                if enabled { try SMAppService.mainApp.register() }
+                else { try SMAppService.mainApp.unregister() }
                 startOnBoot = SMAppService.mainApp.status == .enabled
             } catch {
                 NSLog("[StartOnBoot] \(enabled ? "register" : "unregister") failed: \(error.localizedDescription)")
@@ -387,88 +482,101 @@ final class AppModel: ObservableObject {
         }
     }
 
-    // MARK: - Screen sync
+    // MARK: - Screen sync (per-light sampler)
 
-    private var syncFrameCount = 0
-
+    /// Start one sampler per connected light (each toward its own display).
     func startSync() {
-        guard isConnected else { return }
-        stopAudioFeed()
-        activeEffectType = nil
+        let connected = devices.filter { $0.isConnected }
+        guard !connected.isEmpty else { return }
+        for device in connected { stopAudioFeed(for: device); device.activeEffectType = nil }
 
-        // Screen Recording permission is required for the ambilight capture.
         if !CGPreflightScreenCaptureAccess() {
             NSLog("[Sync] no screen-capture permission; requesting")
             _ = CGRequestScreenCaptureAccess()
         }
 
-        Task { [weak self] in
-                guard let self = self else { return }
-            let s = ScreenColorSampler()
-            s.fps = self.syncFPS
-            // Target display: the user's choice, else the main display.
-            let displayID = self.selectedDisplayID ?? CGMainDisplayID()
-            s.displayID = displayID
-            // Grid dimensions: port of the original getColsAndRows, which uses
-            // the device id + actual lamp count + the display aspect ratio, so
-            // any strip length / monitor works (not just 112 lamps on 21:9).
-            let dims = AppModel.gridDims(forDisplay: displayID, driver: self.driver)
-            s.cols = dims.cols
-            s.rows = dims.rows
-            s.mirrorProvider = { [weak self] in self?.mirrorBox.value ?? false }
-            self.syncFrameCount = 0
-            s.onZones = { [weak self] zones in
-                DispatchQueue.main.async {
-                    guard let self = self, self.syncEnabled else { return }
-                    // Per-zone USB power optimization (lowLightForSync).
-                    let packed: [(r: UInt8, g: UInt8, b: UInt8)] = zones.map { z in
-                        let c = (r: z.r, g: z.g, b: z.b)
-                        return self.usbPowerOptimization ? AppModel.compress(c) : c
-                    }
-                    if self.syncFrameCount % 30 == 0 {
-                        let c = packed.first ?? (0, 0, 0)
-                        NSLog("[Sync] frame \(self.syncFrameCount) zones=\(packed.count) first=(\(c.r),\(c.g),\(c.b))")
-                    }
-                    self.syncFrameCount += 1
-                    self.driver?.streamScreenZones(packed)
+        for device in connected { startSampler(for: device) }
+        syncEnabled = true
+    }
+
+    private func startSampler(for device: LightDevice) {
+        let s = ScreenColorSampler()
+        s.fps = syncFPS
+        let displayID = device.displayID ?? CGMainDisplayID()
+        s.displayID = displayID
+        let dims = AppModel.gridDims(forDisplay: displayID, driver: device.driver)
+        s.cols = dims.cols
+        s.rows = dims.rows
+        s.mirrorProvider = { [weak device] in device?.mirrorBox.value ?? false }
+
+        var frameCount = 0
+        s.onZones = { [weak self, weak device] zones in
+            DispatchQueue.main.async {
+                guard let self = self, let device = device, self.syncEnabled else { return }
+                let packed: [(r: UInt8, g: UInt8, b: UInt8)] = zones.map { z in
+                    let c = (r: z.r, g: z.g, b: z.b)
+                    return self.usbPowerOptimization ? AppModel.compress(c) : c
                 }
+                if frameCount % 30 == 0 {
+                    let c = packed.first ?? (0, 0, 0)
+                    NSLog("[Sync] light=\(device.displayName) frame \(frameCount) zones=\(packed.count) first=(\(c.r),\(c.g),\(c.b))")
+                }
+                frameCount += 1
+                device.driver.streamScreenZones(packed)
             }
+        }
+        Task { [weak self, weak device] in
             do {
                 try await s.start()
-                self.sampler = s
-                self.syncEnabled = true
-                self.driver?.endEffectOrSync()
-                NSLog("[Sync] started, capture running")
+                guard let self = self, let device = device else { return }
+                device.sampler = s
+                device.driver.endEffectOrSync()
+                NSLog("[Sync] started for \(device.displayName)")
             } catch {
-                NSLog("[Sync] start failed: \(error.localizedDescription)")
-                self.syncEnabled = false
-                self.statusText = self.l10n.screenPermission
+                NSLog("[Sync] start failed for \(device?.displayName ?? "?"): \(error.localizedDescription)")
+                self?.statusText = self?.l10n.screenPermission ?? ""
             }
         }
     }
 
     func stopSync() {
-        Task {
-            await sampler?.stop()
-            sampler = nil
+        for device in devices {
+            if let s = device.sampler {
+                s.onZones = nil
+                Task { await s.stop() }
+                device.sampler = nil
+            }
+            device.driver.endEffectOrSync()
         }
         syncEnabled = false
-        driver?.endEffectOrSync()
     }
 
-    /// Restart capture (e.g. after the target display changed while syncing).
-    private func restartSync() {
-        guard syncEnabled else { return }
-        stopSync()
-        // Small delay so the old SCStream fully tears down before restarting.
-        Task { [weak self] in
-            try? await Task.sleep(nanoseconds: 150_000_000)
-            await MainActor.run { self?.startSync() }
+    private func removeSampler(for device: LightDevice) {
+        if let s = device.sampler {
+            s.onZones = nil
+            Task { await s.stop() }
+            device.sampler = nil
         }
     }
 
-    /// Compute the sampling grid via `GridLayout.colsAndRows` using the device
-    /// id + lamp count from the connected driver and the target display size.
+    private func stopSampler(for device: LightDevice) {
+        removeSampler(for: device)
+        device.driver.endEffectOrSync()
+    }
+
+    private func restartSampler(for device: LightDevice) {
+        removeSampler(for: device)
+        Task { [weak self, weak device] in
+            try? await Task.sleep(nanoseconds: 150_000_000)
+            await MainActor.run {
+                guard let self = self, let device = device, self.syncEnabled else { return }
+                self.startSampler(for: device)
+            }
+        }
+    }
+
+    // MARK: - Grid helpers
+
     static func gridDims(forDisplay displayID: UInt32, driver: LightDriver?) -> GridLayout.Dims {
         let lamps = driver?.meta.lampsAmount ?? 112
         let id = driver?.meta.id ?? ""
@@ -479,7 +587,6 @@ final class AppModel: ObservableObject {
                                       displayHeight: h)
     }
 
-    /// Pixel width/height of a display (falls back to points, then 16:9).
     static func displayPixelSize(_ displayID: UInt32) -> (Int, Int) {
         if let mode = CGDisplayCopyDisplayMode(displayID) {
             let pw = mode.pixelWidth, ph = mode.pixelHeight
@@ -492,13 +599,11 @@ final class AppModel: ObservableObject {
         return (1920, 1080)
     }
 
-    /// Match an NSScreen to a CGDirectDisplayID via its device description.
     static func matches(_ screen: NSScreen, _ id: UInt32) -> Bool {
         let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber
         return num?.uint32Value == id
     }
 
-    /// The displays available to mirror, as (displayID, label) — main first.
     static func availableDisplays() -> [(id: UInt32, name: String)] {
         let mainID = CGMainDisplayID()
         var out: [(UInt32, String)] = []
@@ -513,7 +618,6 @@ final class AppModel: ObservableObject {
             }
             out.append((id, label))
         }
-        // Ensure the main display is first.
         out.sort { a, b in
             if a.0 == mainID { return true }
             if b.0 == mainID { return false }
@@ -542,7 +646,6 @@ extension Color {
         return (UInt8(ns.redComponent * 255), UInt8(ns.greenComponent * 255), UInt8(ns.blueComponent * 255))
     }
 
-    /// Hue (0..1) and saturation (0..1) of the color (brightness ignored).
     func toHSB() -> (h: Double, s: Double) {
         let ns = NSColor(self).usingColorSpace(.deviceRGB) ?? NSColor.blue
         var h: CGFloat = 0, s: CGFloat = 0, b: CGFloat = 0, a: CGFloat = 0
@@ -550,11 +653,8 @@ extension Color {
         return (Double(h), Double(s))
     }
 
-    /// Uppercase "#RRGGBB" string for display.
     var hexString: String {
         let rgb = toRGB()
         return String(format: "#%02X%02X%02X", rgb.r, rgb.g, rgb.b)
     }
 }
-
-

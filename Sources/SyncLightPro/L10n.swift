@@ -21,9 +21,17 @@ struct L10n {
     var quit: String { t("Thoát", "Quit") }
     var connect: String { t("Kết nối đèn", "Connect") }
     var disconnect: String { t("Ngắt kết nối", "Disconnect") }
+    var connectAll: String { t("Kết nối tất cả", "Connect all") }
+    var disconnectAll: String { t("Ngắt tất cả", "Disconnect all") }
     var connected: String { t("Đã kết nối", "Connected") }
     var notConnected: String { t("Chưa kết nối", "Not connected") }
     var noDevice: String { t("Không tìm thấy đèn", "No light found") }
+    var light: String { t("Đèn", "Light") }
+    var lights: String { t("Đèn đang dùng", "Lights") }
+    var noLights: String { t("Chưa có đèn nào được kết nối.", "No lights connected yet.") }
+    var selectLight: String { t("Chọn đèn", "Select light") }
+    var assignDisplay: String { t("Gắn màn hình", "Assign display") }
+    var activeLight: String { t("Đang điều khiển", "Editing") }
 
     var tabColor: String { t("Màu", "Color") }
     var tabEffects: String { t("Hiệu ứng", "Effects") }
@@ -47,6 +55,7 @@ struct L10n {
     var samplingFPS: String { t("Tốc độ lấy mẫu", "Sampling FPS") }
     var display: String { t("Màn hình", "Display") }
     var mainDisplay: String { t("Màn hình chính", "Main Display") }
+    var displayOfAll: String { t("Gắn màn hình cho từng đèn", "Assign a display to each light") }
     var direction: String { t("Chiều đèn", "Strip Direction") }
     var leftToRight: String { t("Trái sang phải", "Left to right") }
     var rightToLeft: String { t("Phải sang trái", "Right to left") }

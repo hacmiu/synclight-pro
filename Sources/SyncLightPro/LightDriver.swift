@@ -30,10 +30,28 @@ final class LightDriver {
         self.transport = transport
     }
 
+    /// Best-effort stable identity for persistence: the device's own uuid once
+    /// it has reported it, otherwise empty (caller falls back to locationID).
+    var identityKey: String {
+        !meta.uuid.isEmpty ? "uuid:\(meta.uuid)" : ""
+    }
+
+    /// Connect assuming the transport has ALREADY opened a specific device
+    /// (used for multi-light, where HIDTransport.openSpecific ran first).
+    /// Reads device info + sends setOpenUrl(0), exactly like `connect()`.
+    @discardableResult
+    func connectOnOpenedTransport() -> Bool {
+        return finishConnect()
+    }
+
     @discardableResult
     func connect() -> Bool {
         guard transport.openFirstLight() else { return false }
+        return finishConnect()
+    }
 
+    /// Shared tail of connect(): read info, then setOpenUrl(0).
+    private func finishConnect() -> Bool {
         // Read device info (needed for lamps / uuid / firmware).
         transport.write(RobobloqProtocol.readDeviceInfo(seq: transport.nextSeq()))
         Thread.sleep(forTimeInterval: 0.4)

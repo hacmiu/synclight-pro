@@ -34,7 +34,8 @@ open "build/SyncLight Pro.app"    # run the app
 │   └── menu bar.png             # menu-bar icon
 ├── Sources/SyncLightPro/
 │   ├── App.swift                # @main SwiftUI App, MenuBarExtra + window, AppDelegate
-│   ├── AppModel.swift           # ObservableObject — state + actions (connect, apply*, sync, USB opt, boot)
+│   ├── AppModel.swift           # ObservableObject — multi-light state + actions (connect/apply*/sync)
+│   ├── LightDevice.swift        # one light = transport + driver + sampler + per-light settings
 │   ├── ContentView.swift        # window shell: header, sidebar tabs, footer (cyberpunk)
 │   ├── Pages.swift              # ColorPage, EffectsPage, SyncPage, SettingsPage
 │   ├── CyberpunkTheme.swift     # cyber palette, neon modifiers, CyberSegmented, CyberDropdown
@@ -85,20 +86,25 @@ as-is. After a rebuild, refresh the cache with:
 
 ```
 ContentView / Pages (SwiftUI, cyberpunk theme)
-        │  user actions
+        │  user actions (act on the selected LightDevice)
         ▼
-AppModel (@MainActor ObservableObject)
+AppModel (@MainActor ObservableObject)  ── holds [LightDevice]
         │  applyColor / applyBrightness / … / startSync
         ▼
-LightDriver  ── builds frames via ──►  RobobloqProtocol
-        │                                   │ [UInt8] "RB…"/"SC…"
-        ▼                                   ▼
-HIDTransport.write(frame)  ──IOHIDDeviceSetReport──►  device
-HIDTransport.latestResponse() ◄── input-report callback ◄── device
-        ▲
-ScreenColorSampler (ScreenCaptureKit) ── onZones ──► AppModel ──► streamScreenZones()  (ambilight, 4 sides)
-SystemAudioMeter (CoreAudio)          ── onLevel ──► AppModel ──► setExternalAudio()   (sound-pickup)
+LightDevice ──► LightDriver  ── builds frames via ──►  RobobloqProtocol
+                  │                                   │ [UInt8] "RB…"/"SC…"
+                  ▼                                   ▼
+        HIDTransport.write(frame)  ──IOHIDDeviceSetReport──►  device
+        HIDTransport.latestResponse() ◄── input-report callback ◄── device
+                  ▲
+ScreenColorSampler (one per light, ScreenCaptureKit) ── onZones ──► its driver.streamScreenZones()
+SystemAudioMeter  (one per light)                    ── onLevel ──► its driver.setExternalAudio()
 ```
+
+Each connected light runs its **own** `HIDTransport`, `LightDriver`, and (while
+syncing) its own `ScreenColorSampler` bound to its own display. The app fans the
+per-light commands out to the **selected** light; the sync toggle starts every
+light's sampler at once.
 
 ---
 
@@ -106,13 +112,14 @@ SystemAudioMeter (CoreAudio)          ── onLevel ──► AppModel ──�
 
 | Tab      | What it does                                                        |
 |----------|---------------------------------------------------------------------|
-| Color    | Color swatch (ColorPicker), Hue + Saturation sliders, brightness    |
-| Effects  | Dynamic "幻彩" group (type 2, speed) / sound-pickup "拾音" group (type 3, sensitivity); 7 effects each |
-| Sync     | Real-time screen→light ambilight (wraps all 4 screen edges), **monitor picker** (when >1 display), FPS, strip direction, permission |
-| Settings | Language (vi/en), auto-off timer, **USB Power Optimization**, **Start on boot (menu-bar only)** |
+| Color    | Color swatch (ColorPicker), Hue + Saturation sliders, brightness — for the selected light |
+| Effects  | Dynamic "幻彩" group (type 2, speed) / sound-pickup "拾音" group (type 3, sensitivity); 7 effects each — for the selected light |
+| Sync     | Real-time screen→light ambilight (wraps all 4 screen edges); global on/off + FPS; **one card per light** to assign its monitor + strip direction; permission |
+| Settings | Language (vi/en), per-light auto-off timer, **USB Power Optimization**, **Start on boot (menu-bar only)** |
 
-Device info read at connect: `id`, `uuid`, `firmware`, `lamps` (LED count),
-`displaySize`. Shown in the footer.
+When ≥2 lights are connected, a **light picker** appears at the top of the Color,
+Effects and Settings pages to choose which light you're editing. Device info read
+at connect: `id`, `uuid`, `firmware`, `lamps` (LED count), `displaySize`.
 
 ### Notable behaviours
 
@@ -132,9 +139,13 @@ Device info read at connect: `id`, `uuid`, `firmware`, `lamps` (LED count),
   from the device's real `lampsAmount` and the target display's aspect ratio,
   ported from the original Electron `getAspectRatio` + `getColsAndRows`. This
   makes strips of any length sync correctly (not just the 112-lamp bar on 21:9).
-- **Monitor selection** (Sync tab, shown when >1 display): choose which screen
-  the strip mirrors. Persisted in `UserDefaults`; changing it while syncing
-  restarts capture automatically (`AppModel.restartSync`).
+- **Monitor selection** (Sync tab, proven per light): assign which screen each
+  light mirrors. Persisted per-light in `UserDefaults` (keyed by device uuid /
+  USB location); changing it while syncing restarts that light's capture
+  automatically (`AppModel.setDisplay(_:for:)`).
+- **Multi-light** — each connected light is an independent `LightDevice` with its
+  own settings, effects, auto-off and target display. Hot-plugging a light only
+  affects that light.
 
 ---
 
@@ -151,8 +162,11 @@ Device info read at connect: `id`, `uuid`, `firmware`, `lamps` (LED count),
 - ✅ **App icon** pipeline (PNG/SVG → `.icns` in `build.sh`).
 - ✅ **Adaptive LED grid** for any strip length (`GridLayout.swift`) and
   **monitor selection** (Sync tab).
+- ✅ **Multi-light control** — several USB HID lights at once, each bound to its
+  own display with its own settings/effects (`LightDevice.swift`; per-light
+  persistence map `pref.perLightSettings`).
 - ⚠️ Effects mapping is a best-effort table in `Pages.swift`; fine-tune if a
   device disagrees.
-- ⚠️ **Single light only**; BLE/dongle/serial not supported (see repo README).
+- ⚠️ BLE / dongle / serial not supported (see repo README).
 
 See **`docs/SESSION_HANDOFF.md`** for details and remaining polish.

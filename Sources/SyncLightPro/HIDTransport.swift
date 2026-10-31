@@ -25,6 +25,18 @@ final class HIDTransport {
         var serial: String
         var usagePage: Int
         var usage: Int
+        /// Registry location id (USB bus/port address). Stable across relaunches
+        /// as long as the light stays in the same port; used as an identity
+        /// fallback before the device has reported its own uuid.
+        var locationID: Int
+    }
+
+    /// A matched registry entry paired with its device info. `openSpecific`
+    /// uses `entry` to create the IOHIDDevice directly (see DEV_NOTES: devices
+    /// MUST be opened from the IOService registry, not IOHIDManagerCopyDevices).
+    struct MatchedEntry {
+        var info: DeviceInfo
+        var entry: io_service_t
     }
 
     enum TransportType: String {
@@ -35,7 +47,11 @@ final class HIDTransport {
 
     // MARK: - Enumeration
 
-    static func enumerate() -> [DeviceInfo] {
+    /// Enumerate every matched Robobloq device along with its live registry
+    /// entry. The returned entry handles are owned by the caller: release the
+    /// ones you do NOT open via `releaseEntry(for:)` (the one passed to
+    /// `openSpecific` is consumed/released there).
+    static func enumerateEntries() -> [MatchedEntry] {
         var iter: io_iterator_t = 0
         let matching = IOServiceMatching(kIOHIDDeviceKey) as NSMutableDictionary
         for (k, v) in roboMatch { matching[k] = v }
@@ -44,16 +60,29 @@ final class HIDTransport {
         }
         defer { IOObjectRelease(iter) }
 
-        var out: [DeviceInfo] = []
+        var out: [MatchedEntry] = []
         var entry = IOIteratorNext(iter)
         while entry != 0 {
             if let dev = IOHIDDeviceCreate(kCFAllocatorDefault, entry) {
-                out.append(info(of: dev))
+                out.append(MatchedEntry(info: info(of: dev), entry: entry))
+            } else {
+                IOObjectRelease(entry)
             }
-            IOObjectRelease(entry)
             entry = IOIteratorNext(iter)
         }
         return out
+    }
+
+    /// Release a registry entry that will not be opened.
+    static func releaseEntry(for m: MatchedEntry) {
+        if m.entry != 0 { IOObjectRelease(m.entry) }
+    }
+
+    static func enumerate() -> [DeviceInfo] {
+        let entries = enumerateEntries()
+        let infos = entries.map { $0.info }
+        for m in entries { releaseEntry(for: m) }
+        return infos
     }
 
     private static func prop<T>(_ dev: IOHIDDevice, _ key: String, _ dflt: T) -> T {
@@ -69,7 +98,8 @@ final class HIDTransport {
             product: prop(dev, kIOHIDProductKey, ""),
             serial: prop(dev, kIOHIDSerialNumberKey, ""),
             usagePage: prop(dev, kIOHIDPrimaryUsagePageKey, 0),
-            usage: prop(dev, kIOHIDPrimaryUsageKey, 0)
+            usage: prop(dev, kIOHIDPrimaryUsageKey, 0),
+            locationID: prop(dev, kIOHIDLocationIDKey, 0)
         )
     }
 
@@ -97,30 +127,22 @@ final class HIDTransport {
     /// usagePage 0xFF00 / usage 1) directly from the IORegistry.
     @discardableResult
     func openFirstLight() -> Bool {
-        var iter: io_iterator_t = 0
-        let matching = IOServiceMatching(kIOHIDDeviceKey) as NSMutableDictionary
-        for (k, v) in Self.roboMatch { matching[k] = v }
-        guard IOServiceGetMatchingServices(kIOMainPortDefault, matching, &iter) == KERN_SUCCESS else {
-            return false
-        }
-        defer { IOObjectRelease(iter) }
+        let entries = Self.enumerateEntries()
+        guard !entries.isEmpty else { return false }
+        // Prefer a vendor interface entry; otherwise the first one.
+        let chosen = entries.first(where: { $0.info.usagePage == 0xFF00 && $0.info.usage == 1 }) ?? entries[0]
+        let opened = openSpecific(chosen)
+        // Release every entry we didn't open (openSpecific consumes `chosen`).
+        for e in entries where e.entry != chosen.entry { Self.releaseEntry(for: e) }
+        return opened
+    }
 
-        var chosen: IOHIDDevice?
-        var entry = IOIteratorNext(iter)
-        while entry != 0 {
-            if let dev = IOHIDDeviceCreate(kCFAllocatorDefault, entry) {
-                let up = Self.prop(dev, kIOHIDPrimaryUsagePageKey, 0)
-                let us = Self.prop(dev, kIOHIDPrimaryUsageKey, 0)
-                // First device, or upgrade to the vendor interface.
-                if chosen == nil || (up == 0xFF00 && us == 1) {
-                    chosen = dev
-                }
-                if up == 0xFF00 && us == 1 { break }
-            }
-            IOObjectRelease(entry)
-            entry = IOIteratorNext(iter)
-        }
-        guard let dev = chosen else { return false }
+    /// Open one specific matched device (creates the IOHIDDevice from its
+    /// registry entry). Consumes and releases the entry handle.
+    @discardableResult
+    func openSpecific(_ matched: MatchedEntry) -> Bool {
+        defer { Self.releaseEntry(for: matched) }
+        guard let dev = IOHIDDeviceCreate(kCFAllocatorDefault, matched.entry) else { return false }
 
         guard IOHIDDeviceOpen(dev, IOOptionBits(kIOHIDOptionsTypeNone)) == kIOReturnSuccess else {
             return false
