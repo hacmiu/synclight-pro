@@ -7,8 +7,9 @@ import ServiceManagement
 ///
 /// Multi-light (Part C): the app now holds `[LightDevice]`. Each light has its
 /// own settings + its own screen sampler bound to one display. The Color /
-/// Effects / Settings pages act on the *selected* light; the sync toggle is
-/// global and drives every light's sampler toward that light's display.
+/// Effects / Sync / Settings pages act on the *selected* light (or on every
+/// connected light when `applyToAllLights` is on); each light has its own
+/// screen-sync toggle that drives its own sampler.
 @MainActor
 final class AppModel: ObservableObject {
 
@@ -18,6 +19,7 @@ final class AppModel: ObservableObject {
         static let language = "pref.language"
         static let syncFPS = "pref.syncFPS"
         static let usbPowerOptimization = "pref.usbPowerOptimization"
+        static let applyToAll = "pref.applyToAllLights"
         static let hasUsedLight = "pref.hasUsedLight"            // enables auto-connect
         static let selectedDisplayID = "pref.selectedDisplayID"  // legacy single-light
         /// Per-light settings map: persistenceKey -> encoded LightSettings.
@@ -31,6 +33,21 @@ final class AppModel: ObservableObject {
     @Published var syncFPS: Double = 30 { didSet { save(PrefKey.syncFPS, syncFPS) } }
     @Published var usbPowerOptimization = true { didSet { save(PrefKey.usbPowerOptimization, usbPowerOptimization) } }
     @Published var startOnBoot = false
+
+    /// When ON, colour / effect / brightness / speed / sensitivity / auto-off
+    /// commands apply to EVERY connected light instead of just the selected one.
+    /// Global (app-wide) preference; persisted.
+    @Published var applyToAllLights = false { didSet { save(PrefKey.applyToAll, applyToAllLights) } }
+
+    /// Lights a per-light command should target: all connected when
+    /// `applyToAllLights`, otherwise just the selected light.
+    var targetDevices: [LightDevice] {
+        if applyToAllLights {
+            let all = devices.filter { $0.isConnected }
+            if !all.isEmpty { return all }
+        }
+        return selectedDevice.map { [$0] } ?? []
+    }
 
     /// True when at least one light is mirroring its display (per-light sync).
     var syncActive: Bool { devices.contains { $0.isConnected && $0.syncEnabled } }
@@ -106,6 +123,9 @@ final class AppModel: ObservableObject {
         if ud.object(forKey: PrefKey.syncFPS) != nil { syncFPS = clamp(ud.double(forKey: PrefKey.syncFPS), 5, 60) }
         if ud.object(forKey: PrefKey.usbPowerOptimization) != nil {
             usbPowerOptimization = ud.bool(forKey: PrefKey.usbPowerOptimization)
+        }
+        if ud.object(forKey: PrefKey.applyToAll) != nil {
+            applyToAllLights = ud.bool(forKey: PrefKey.applyToAll)
         }
     }
 
@@ -371,10 +391,16 @@ final class AppModel: ObservableObject {
         objectWillChange.send()
     }
 
-    // MARK: - Color / Brightness / settings (per selected light)
+    // MARK: - Color / Brightness / settings (per selected light, or all)
 
+    /// Apply the static colour of every target light (selected, or all when
+    /// `applyToAllLights`). Also turns OFF screen-sync for those lights.
     func applyColor() {
-        guard let device = selectedDevice else { return }
+        for device in targetDevices { applyColor(to: device) }
+        objectWillChange.send()
+    }
+
+    private func applyColor(to device: LightDevice) {
         // Choosing a static colour turns OFF screen-sync for THIS light only.
         stopSampler(for: device)
         device.syncEnabled = false
@@ -387,16 +413,57 @@ final class AppModel: ObservableObject {
         if usbPowerOptimization { rgb = AppModel.compress(rgb) }
         device.driver.setColor(r: rgb.r, g: rgb.g, b: rgb.b)
         persist(device)
+    }
+
+    /// Set hue/saturation from a picked color. When applying to all lights, the
+    /// same hue/saturation is copied to every target light.
+    func setColor(_ newColor: Color) {
+        let hsb = newColor.toHSB()
+        for device in targetDevices {
+            device.hue = hsb.h
+            device.saturation = hsb.s
+            applyColor(to: device)
+        }
         objectWillChange.send()
     }
 
-    /// Set hue/saturation from a picked color on the selected light.
-    func setColor(_ newColor: Color) {
-        guard let device = selectedDevice else { return }
-        let hsb = newColor.toHSB()
-        device.hue = hsb.h
-        device.saturation = hsb.s
-        applyColor()
+    /// Set ONLY the hue on every target light (used by the hue slider so that,
+    /// with "apply to all" on, all lights share the hue).
+    func setHue(_ hue: Double) {
+        for device in targetDevices {
+            device.hue = hue
+            applyColor(to: device)
+        }
+        objectWillChange.send()
+    }
+
+    /// Set ONLY the saturation on every target light (saturation slider).
+    func setSaturation(_ s: Double) {
+        for device in targetDevices {
+            device.saturation = s
+            applyColor(to: device)
+        }
+        objectWillChange.send()
+    }
+
+    /// Set ONLY the brightness value on every target light (brightness slider).
+    func setBrightness(_ value: Double) {
+        for device in targetDevices {
+            device.brightness = value
+        }
+        applyBrightness()
+    }
+
+    /// Set dynamic speed on every target light (effects speed slider).
+    func setDynamicSpeed(_ value: Double) {
+        for device in targetDevices { device.dynamicSpeed = value }
+        applySpeed()
+    }
+
+    /// Set sound sensitivity on every target light (pickup sensitivity slider).
+    func setSoundSensitivity(_ value: Double) {
+        for device in targetDevices { device.soundSensitivity = value }
+        applySoundSensitivity()
     }
 
     /// USB Power Optimization: scale a colour down so R+G+B <= 255.
@@ -412,26 +479,44 @@ final class AppModel: ObservableObject {
         on ? compress(c) : c
     }
 
+    /// Apply brightness to every target light. When a light is running an
+    /// effect, re-issue the effect frame so the new brightness takes (the USB
+    /// light only commits brightness alongside a fresh colour/effect frame).
     func applyBrightness() {
-        guard let device = selectedDevice else { return }
-        device.driver.setBrightness(UInt8(max(0, min(255, (device.brightness / 100.0 * 255.0).rounded()))))
-        persist(device)
+        for device in targetDevices {
+            let v = UInt8(max(0, min(255, (device.brightness / 100.0 * 255.0).rounded())))
+            if let type = device.activeEffectType {
+                device.driver.setBrightnessInEffect(v, effectType: type, effectIndex: device.lastEffectIndex ?? 0)
+            } else {
+                device.driver.setBrightness(v)
+            }
+            persist(device)
+        }
+        objectWillChange.send()
     }
 
     func applySpeed() {
-        guard let device = selectedDevice else { return }
-        device.driver.setDynamicSpeed(UInt8(100 - device.dynamicSpeed))
-        persist(device)
+        for device in targetDevices {
+            device.driver.setDynamicSpeed(UInt8(100 - device.dynamicSpeed))
+            persist(device)
+        }
+        objectWillChange.send()
     }
 
     func applySoundSensitivity() {
-        guard let device = selectedDevice else { return }
-        device.driver.setSoundSensitivity(UInt8(device.soundSensitivity))
-        persist(device)
+        for device in targetDevices {
+            device.driver.setSoundSensitivity(UInt8(device.soundSensitivity))
+            persist(device)
+        }
+        objectWillChange.send()
     }
 
     func applyEffect(type: UInt8, index: UInt8) {
-        guard let device = selectedDevice else { return }
+        for device in targetDevices { applyEffect(type: type, index: index, to: device) }
+        objectWillChange.send()
+    }
+
+    private func applyEffect(type: UInt8, index: UInt8, to device: LightDevice) {
         // Choosing an effect turns OFF screen-sync for THIS light only.
         stopSampler(for: device)
         device.syncEnabled = false
@@ -448,13 +533,14 @@ final class AppModel: ObservableObject {
             stopAudioFeed(for: device)
         }
         persist(device)
-        objectWillChange.send()
     }
 
     func applyAutoOff() {
-        guard let device = selectedDevice else { return }
-        device.driver.setAutoOff(enable: device.autoOffEnabled, minutes: UInt8(device.autoOffMinutes))
-        persist(device)
+        for device in targetDevices {
+            device.driver.setAutoOff(enable: device.autoOffEnabled, minutes: UInt8(device.autoOffMinutes))
+            persist(device)
+        }
+        objectWillChange.send()
     }
 
     /// Change which display the selected light mirrors (persisted per light).

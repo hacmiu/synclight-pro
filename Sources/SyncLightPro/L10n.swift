@@ -32,6 +32,7 @@ struct L10n {
     var selectLight: String { t("Chọn đèn", "Select light") }
     var assignDisplay: String { t("Gắn màn hình", "Assign display") }
     var activeLight: String { t("Đang điều khiển", "Editing") }
+    var applyToAll: String { t("Tất cả", "All lights") }
 
     var tabColor: String { t("Màu", "Color") }
     var tabEffects: String { t("Hiệu ứng", "Effects") }

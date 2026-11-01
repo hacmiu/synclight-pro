@@ -119,6 +119,22 @@ final class LightDriver {
         transport.write(RobobloqProtocol.setSectionColor(seq: transport.nextSeq(), r: r, g: g, b: b, lamps: meta.lampsAmount))
     }
 
+    /// Change brightness while an EFFECT is running. The USB light only applies
+    /// a new brightness level when it is followed by a fresh colour/effect
+    /// frame, so we send 135 and then RE-ISSUE the current effect frame
+    /// (type/index). The effect restarts on-device with the new brightness.
+    /// `effectType == nil` means "no effect is active" (caller should use the
+    /// plain `setBrightness` instead).
+    func setBrightnessInEffect(_ value: UInt8, effectType: UInt8?, effectIndex: UInt8) {
+        let v = max(value, 5)
+        transport.write(RobobloqProtocol.setBrightness(seq: transport.nextSeq(), value: v))
+        guard let type = effectType else { return }
+        Thread.sleep(forTimeInterval: 0.02)
+        isEffectOrSyncActive = true
+        // Re-issue the effect frame so the device commits the new brightness.
+        transport.write(RobobloqProtocol.setLedEffect(seq: transport.nextSeq(), effectType: type, effectIndex: effectIndex))
+    }
+
     func setLedEffect(type: UInt8, index: UInt8) {
         isEffectOrSyncActive = true
         // The original app primes the strip with the current colour

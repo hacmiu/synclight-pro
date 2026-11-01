@@ -10,7 +10,9 @@ original Electron app.
 - Connect to the USB light over HID (`0x1A86:0xFE07`)
 - **Multi-light** — drive several bars at once; each light has its **own**
   settings, effects, auto-off, **its own screen-sync toggle**, and **its own
-  target monitor**. A dropdown in the header picks which light the pages edit.
+  target monitor**. A dropdown in the header picks which light the pages edit,
+  and an **"All lights"** switch applies a change to every connected light at
+  once.
 - Static color, custom picker, brightness
 - Effects (rainbow / breathing / flow / comet / music …) with speed & sound sensitivity
 - Real-time **screen sync** (ambilight) via ScreenCaptureKit, wrapping all four screen edges

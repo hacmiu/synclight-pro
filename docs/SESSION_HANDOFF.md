@@ -147,7 +147,6 @@ single `driver` + `sampler`. Each `LightDevice` owns its own `HIDTransport`,
 screen-sync toggle (`syncEnabled`)**, and its **own** settings (hue,
 saturation, brightness, speed, sensitivity, direction, auto-off, last effect).
 Highlights:
-
 - **`HIDTransport`** — added `enumerateEntries()` (each device + its live
   registry entry), `openSpecific(_:)` (open one specific entry, consuming the
   handle) and `releaseEntry(for:)`. `openFirstLight()` is now a thin wrapper.
@@ -178,6 +177,27 @@ Highlights:
   their controls bind to the selected light. Header button is Connect /
   Disconnect all; footer shows the connected-light count when >1. Single-light
   behavior is unchanged.
+
+## Apply-to-all + brightness-while-effect — DONE
+
+- **Apply to all lights** — new global `AppModel.applyToAllLights` (persisted,
+  `pref.applyToAllLights`). When on, a `targetDevices` helper returns every
+  connected light; the per-light commands (`applyColor`, `applyEffect`,
+  `applyBrightness`, `applySpeed`, `applySoundSensitivity`, `applyAutoOff`) now
+  loop over `targetDevices`. The hue / saturation / brightness / speed /
+  sensitivity sliders go through new broadcasting setters
+  (`setHue`/`setSaturation`/`setBrightness`/`setDynamicSpeed`/
+  `setSoundSensitivity`) so the selected light's value is copied onto all. UI: a
+  compact **"All lights"** switch next to the header light dropdown (shown with
+  ≥2 lights).
+- **Brightness for effects** — the USB light only commits a brightness change
+  alongside a fresh colour/effect frame, so `LightDriver.setBrightness` used to
+  bail out while an effect ran. New `LightDriver.setBrightnessInEffect(value:
+  effectType:effectIndex:)` sends 135 then RE-issues the current effect frame
+  (type/index). `AppModel.applyBrightness` uses it when
+  `device.activeEffectType != nil`, so the brightness slider now works for
+  running effects.
+
 
 ## Wake-from-sleep refresh — DONE
 

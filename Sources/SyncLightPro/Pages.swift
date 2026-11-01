@@ -99,8 +99,8 @@ struct ColorPage: View {
                     }
                     HueSlider(hue: Binding(
                         get: { device.hue },
-                        set: { device.hue = $0 }
-                    ), onChange: { model.applyColor() })
+                        set: { model.setHue($0) }
+                    ))
                 }
 
                 // Saturation slider — gradient from white (0) to full colour (1).
@@ -114,14 +114,13 @@ struct ColorPage: View {
                     GradientSlider(
                         value: Binding(
                             get: { device.saturation },
-                            set: { device.saturation = $0 }
+                            set: { model.setSaturation($0) }
                         ),
                         colors: [
                             Color(hue: device.hue, saturation: 0, brightness: 1),
                             Color(hue: device.hue, saturation: 1, brightness: 1)
                         ],
-                        thumbColor: Color(hue: device.hue, saturation: device.saturation, brightness: 1),
-                        onChange: { model.applyColor() }
+                        thumbColor: Color(hue: device.hue, saturation: device.saturation, brightness: 1)
                     )
                 }
 
@@ -137,7 +136,7 @@ struct ColorPage: View {
                     }
                     Slider(value: Binding(
                         get: { device.brightness },
-                        set: { device.brightness = $0; model.applyBrightness() }
+                        set: { model.setBrightness($0) }
                     ), in: 0...100).tint(Cyber.yellow)
                 }
             } else {
@@ -228,7 +227,7 @@ struct EffectsPage: View {
                 if group == .dynamic {
                     sliderRow(icon: "speedometer", title: l.dynamicSpeed, value: Binding(
                         get: { device.dynamicSpeed },
-                        set: { device.dynamicSpeed = $0; model.applySpeed() }
+                        set: { model.setDynamicSpeed($0) }
                     ), range: 5...100)
                 }
 
@@ -236,7 +235,7 @@ struct EffectsPage: View {
                 if group == .pickup {
                     sliderRow(icon: "ear", title: l.soundSensitivity, value: Binding(
                         get: { device.soundSensitivity },
-                        set: { device.soundSensitivity = $0; model.applySoundSensitivity() }
+                        set: { model.setSoundSensitivity($0) }
                     ), range: 5...100)
                 }
             }

@@ -76,7 +76,7 @@ struct ContentView: View {
             // when 2+ lights are connected; single-light behaves as before.
             let connectedLights = model.devices.filter { $0.isConnected }
             if connectedLights.count > 1 {
-                HStack(spacing: 6) {
+                HStack(spacing: 8) {
                     Image(systemName: "lightbulb.2")
                         .foregroundStyle(Cyber.cyan)
                     CyberDropdown(
@@ -91,11 +91,23 @@ struct ContentView: View {
                             }
                         ),
                         accent: Cyber.cyan,
-                        width: 150
+                        width: 130
                     )
+                    Divider().frame(height: 18).overlay(Cyber.cyan.opacity(0.4))
+                    // Apply-to-all toggle: colour/effect/brightness/... affect
+                    // every connected light instead of just the selected one.
+                    Toggle(isOn: $model.applyToAllLights) {
+                        Text(l.applyToAll)
+                            .font(.system(.caption, design: .monospaced).weight(.bold))
+                            .foregroundStyle(model.applyToAllLights ? Cyber.cyan : Cyber.textDim)
+                    }
+                    .toggleStyle(.switch)
+                    .tint(Cyber.cyan)
+                    .controlSize(.mini)
+                    .fixedSize()
                 }
                 .padding(.horizontal, 10).padding(.vertical, 4)
-                .cyberPanel(corner: 8, border: Cyber.cyan, glow: 6)
+                .cyberPanel(corner: 8, border: model.applyToAllLights ? Cyber.cyan : Cyber.cyan.opacity(0.5), glow: 6)
             }
 
             HStack(spacing: 8) {
