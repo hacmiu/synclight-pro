@@ -102,9 +102,9 @@ SystemAudioMeter  (one per light)                    ── onLevel ──► it
 ```
 
 Each connected light runs its **own** `HIDTransport`, `LightDriver`, and (while
-syncing) its own `ScreenColorSampler` bound to its own display. The app fans the
-per-light commands out to the **selected** light; the sync toggle starts every
-light's sampler at once.
+that light's sync is on) its own `ScreenColorSampler` bound to its own display.
+The Color / Effects / Sync / Settings pages act on the **selected** light; each
+light has an independent sync toggle that starts/stops just its own sampler.
 
 ---
 
@@ -114,12 +114,12 @@ light's sampler at once.
 |----------|---------------------------------------------------------------------|
 | Color    | Color swatch (ColorPicker), Hue + Saturation sliders, brightness — for the selected light |
 | Effects  | Dynamic "幻彩" group (type 2, speed) / sound-pickup "拾音" group (type 3, sensitivity); 7 effects each — for the selected light |
-| Sync     | Real-time screen→light ambilight (wraps all 4 screen edges); global on/off + FPS; **one card per light** to assign its monitor + strip direction; permission |
+| Sync     | Per-light screen→light ambilight (wraps all 4 screen edges). Toggle for the selected light + FPS + **one card per light** to toggle its sync, assign its monitor and strip direction; permission |
 | Settings | Language (vi/en), per-light auto-off timer, **USB Power Optimization**, **Start on boot (menu-bar only)** |
 
-When ≥2 lights are connected, a **light picker** appears at the top of the Color,
-Effects and Settings pages to choose which light you're editing. Device info read
-at connect: `id`, `uuid`, `firmware`, `lamps` (LED count), `displaySize`.
+When ≥2 lights are connected, a **dropdown in the window header** picks which
+light the Color / Effects / Settings / Sync pages edit. Device info read at
+connect: `id`, `uuid`, `firmware`, `lamps` (LED count), `displaySize`.
 
 ### Notable behaviours
 
@@ -139,13 +139,14 @@ at connect: `id`, `uuid`, `firmware`, `lamps` (LED count), `displaySize`.
   from the device's real `lampsAmount` and the target display's aspect ratio,
   ported from the original Electron `getAspectRatio` + `getColsAndRows`. This
   makes strips of any length sync correctly (not just the 112-lamp bar on 21:9).
-- **Monitor selection** (Sync tab, proven per light): assign which screen each
+- **Monitor selection** (Sync tab, per light): assign which screen each
   light mirrors. Persisted per-light in `UserDefaults` (keyed by device uuid /
-  USB location); changing it while syncing restarts that light's capture
+  USB location); toggling it while syncing restarts that light's capture
   automatically (`AppModel.setDisplay(_:for:)`).
 - **Multi-light** — each connected light is an independent `LightDevice` with its
-  own settings, effects, auto-off and target display. Hot-plugging a light only
-  affects that light.
+  own settings, effects, auto-off, **its own screen-sync toggle** and its own
+  target display. Picking a static colour/effect turns sync off for **that light
+  only**. Hot-plugging a light only affects that light.
 
 ---
 

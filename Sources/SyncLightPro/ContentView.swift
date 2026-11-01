@@ -72,6 +72,32 @@ struct ContentView: View {
             }
             Spacer()
 
+            // Light selector — chooses which light all pages edit. Only shown
+            // when 2+ lights are connected; single-light behaves as before.
+            let connectedLights = model.devices.filter { $0.isConnected }
+            if connectedLights.count > 1 {
+                HStack(spacing: 6) {
+                    Image(systemName: "lightbulb.2")
+                        .foregroundStyle(Cyber.cyan)
+                    CyberDropdown(
+                        options: connectedLights.map { $0.id },
+                        title: { id in
+                            connectedLights.first(where: { $0.id == id })?.displayName ?? l.activeLight
+                        },
+                        selection: Binding(
+                            get: { model.selectedDevice?.id ?? connectedLights[0].id },
+                            set: { id in
+                                if let d = model.devices.first(where: { $0.id == id }) { model.select(d) }
+                            }
+                        ),
+                        accent: Cyber.cyan,
+                        width: 150
+                    )
+                }
+                .padding(.horizontal, 10).padding(.vertical, 4)
+                .cyberPanel(corner: 8, border: Cyber.cyan, glow: 6)
+            }
+
             HStack(spacing: 8) {
                 Circle()
                     .fill(model.isConnected ? Cyber.green : Cyber.red)

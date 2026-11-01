@@ -1,45 +1,32 @@
 import SwiftUI
 
-// MARK: - Light picker (shared header for per-light pages)
+// MARK: - Active-light context label (per-light pages)
 
-/// Horizontal strip of small buttons to choose which light the Color / Effects
-/// / Settings pages edit. Hidden when there are 0 or 1 lights (single-light
-/// behaves exactly like before).
+/// Small "editing: <light>" caption shown at the top of the Color / Effects /
+/// Settings pages when more than one light is connected. The actual light
+/// SELECTION lives in the window header dropdown (see ContentView); this is just
+/// an in-page reminder of which light the controls below apply to.
 struct LightPicker: View {
     @EnvironmentObject var model: AppModel
 
     var body: some View {
         let l = model.l10n
         let connected = model.devices.filter { $0.isConnected }
-        if connected.count > 1 {
+        if connected.count > 1, let device = model.selectedDevice {
             HStack(spacing: 8) {
                 Image(systemName: "lightbulb.2").foregroundStyle(Cyber.cyan)
                 Text(l.activeLight)
                     .font(.system(.caption, design: .monospaced).weight(.semibold))
                     .foregroundStyle(Cyber.textDim)
-                ForEach(connected) { device in
-                    let selected = (model.selectedDevice?.id == device.id)
-                    Button {
-                        model.select(device)
-                    } label: {
-                        HStack(spacing: 6) {
-                            Circle().fill(Cyber.green).frame(width: 7, height: 7)
-                            Text(device.displayName)
-                                .font(.system(.caption, design: .monospaced).weight(.bold))
-                                .foregroundStyle(selected ? Cyber.text : Cyber.textDim)
-                        }
-                        .padding(.horizontal, 10).padding(.vertical, 6)
-                        .background(
-                            RoundedRectangle(cornerRadius: 8)
-                                .fill(selected ? Cyber.cyan.opacity(0.15) : Cyber.panel.opacity(0.6))
-                        )
-                        .overlay(
-                            RoundedRectangle(cornerRadius: 8)
-                                .strokeBorder(selected ? Cyber.cyan.opacity(0.8) : Color.clear, lineWidth: 1)
-                        )
-                    }
-                    .buttonStyle(.plain)
+                HStack(spacing: 6) {
+                    Circle().fill(Cyber.green).frame(width: 7, height: 7)
+                    Text(device.displayName)
+                        .font(.system(.caption, design: .monospaced).weight(.bold))
+                        .foregroundStyle(Cyber.cyan)
                 }
+                .padding(.horizontal, 8).padding(.vertical, 4)
+                .background(RoundedRectangle(cornerRadius: 6).fill(Cyber.cyan.opacity(0.12)))
+                .overlay(RoundedRectangle(cornerRadius: 6).strokeBorder(Cyber.cyan.opacity(0.6), lineWidth: 1))
                 Spacer()
             }
         }
@@ -291,18 +278,27 @@ struct SyncPage: View {
                 .font(.system(.callout, design: .monospaced))
                 .foregroundStyle(Cyber.textDim)
 
-            // Global sync toggle — starts/stops a sampler for every light.
+            // Screen-sync toggle for the SELECTED light. Each light mirrors its
+            // own display independently; other lights keep their own state.
+            let selected = model.selectedDevice
             Toggle(isOn: Binding(
-                get: { model.syncEnabled },
-                set: { on in on ? model.startSync() : model.stopSync() }
+                get: { selected?.syncEnabled ?? false },
+                set: { on in model.setSync(on) }
             )) {
-                Text(l.syncOn)
-                    .font(.system(.callout, design: .monospaced).weight(.bold))
-                    .foregroundStyle(Cyber.text)
+                HStack(spacing: 8) {
+                    Text(l.syncOn)
+                        .font(.system(.callout, design: .monospaced).weight(.bold))
+                        .foregroundStyle(Cyber.text)
+                    if let d = selected, model.devices.filter({ $0.isConnected }).count > 1 {
+                        Text("· \(d.displayName)")
+                            .font(.system(.caption, design: .monospaced))
+                            .foregroundStyle(Cyber.cyan)
+                    }
+                }
             }
             .toggleStyle(.switch)
             .tint(Cyber.cyan)
-            .disabled(!model.isConnected)
+            .disabled(selected == nil)
 
             VStack(alignment: .leading, spacing: 8) {
                 HStack {
@@ -364,6 +360,11 @@ struct LightCard: View {
                     .font(.system(.caption, design: .monospaced))
                     .foregroundStyle(Cyber.textDim)
                 Spacer()
+                // Per-light screen-sync switch.
+                Toggle("", isOn: Binding(
+                    get: { device.syncEnabled },
+                    set: { on in model.setSync(on, for: device) }
+                )).labelsHidden().tint(Cyber.cyan)
                 Button(l.disconnect) { model.disconnect(device) }
                     .buttonStyle(CyberButtonStyle(color: Cyber.magenta))
             }

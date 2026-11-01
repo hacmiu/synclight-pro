@@ -29,9 +29,11 @@ final class AppModel: ObservableObject {
 
     // Global settings (app-wide)
     @Published var syncFPS: Double = 30 { didSet { save(PrefKey.syncFPS, syncFPS) } }
-    @Published var syncEnabled = false
     @Published var usbPowerOptimization = true { didSet { save(PrefKey.usbPowerOptimization, usbPowerOptimization) } }
     @Published var startOnBoot = false
+
+    /// True when at least one light is mirroring its display (per-light sync).
+    var syncActive: Bool { devices.contains { $0.isConnected && $0.syncEnabled } }
 
     // MARK: - Multi-light state
 
@@ -130,6 +132,7 @@ final class AppModel: ObservableObject {
         var autoOffMinutes: Double
         var lastEffectType: UInt8?
         var lastEffectIndex: UInt8?
+        var syncEnabled: Bool?
     }
 
     private func loadPerLightMap() -> [String: LightSettings] {
@@ -160,7 +163,8 @@ final class AppModel: ObservableObject {
             autoOffEnabled: device.autoOffEnabled,
             autoOffMinutes: device.autoOffMinutes,
             lastEffectType: device.lastEffectType,
-            lastEffectIndex: device.lastEffectIndex
+            lastEffectIndex: device.lastEffectIndex,
+            syncEnabled: device.syncEnabled
         )
         storePerLightMap(map)
     }
@@ -181,6 +185,7 @@ final class AppModel: ObservableObject {
             device.lastEffectType = s.lastEffectType
             device.lastEffectIndex = s.lastEffectIndex
             device.displayID = s.displayID
+            device.syncEnabled = s.syncEnabled ?? false
         } else if let legacy = UserDefaults.standard.object(forKey: PrefKey.selectedDisplayID) as? Int,
                   legacy != 0 {
             device.displayID = UInt32(legacy)
@@ -222,7 +227,7 @@ final class AppModel: ObservableObject {
         }
         if removedAny {
             if !devices.contains(where: { $0.isConnected }) {
-                stopSync()
+                stopSyncAll()
                 statusText = l10n.noDevice
             }
             objectWillChange.send()
@@ -294,7 +299,7 @@ final class AppModel: ObservableObject {
         objectWillChange.send()
 
         reapplyRestoredSettings(for: device)
-        if syncEnabled { startSampler(for: device) }
+        if device.syncEnabled { startSampler(for: device) }
     }
 
     /// On launch, auto-connect lights we've used before that are present.
@@ -335,7 +340,7 @@ final class AppModel: ObservableObject {
     // MARK: - Disconnect
 
     func disconnect() {
-        stopSync()
+        stopSyncAll()
         for device in devices { teardownLight(device) }
         devices.removeAll()
         selectedLightID = nil
@@ -370,6 +375,9 @@ final class AppModel: ObservableObject {
 
     func applyColor() {
         guard let device = selectedDevice else { return }
+        // Choosing a static colour turns OFF screen-sync for THIS light only.
+        stopSampler(for: device)
+        device.syncEnabled = false
         stopAudioFeed(for: device)
         device.activeEffectType = nil
         device.lastEffectType = nil
@@ -424,7 +432,9 @@ final class AppModel: ObservableObject {
 
     func applyEffect(type: UInt8, index: UInt8) {
         guard let device = selectedDevice else { return }
-        if syncEnabled { stopSampler(for: device) }
+        // Choosing an effect turns OFF screen-sync for THIS light only.
+        stopSampler(for: device)
+        device.syncEnabled = false
         device.driver.setSoundSensitivity(UInt8(device.soundSensitivity))
         if type == 2 { device.driver.setDynamicSpeed(UInt8(100 - device.dynamicSpeed)) }
         device.driver.setLedEffect(type: type, index: index)
@@ -451,7 +461,7 @@ final class AppModel: ObservableObject {
     func setDisplay(_ displayID: UInt32?, for device: LightDevice) {
         device.displayID = displayID
         persist(device)
-        if syncEnabled { restartSampler(for: device) }
+        if device.syncEnabled { restartSampler(for: device) }
         objectWillChange.send()
     }
 
@@ -511,22 +521,38 @@ final class AppModel: ObservableObject {
 
     // MARK: - Screen sync (per-light sampler)
 
-    /// Start one sampler per connected light (each toward its own display).
-    func startSync() {
-        let connected = devices.filter { $0.isConnected }
-        guard !connected.isEmpty else { return }
-        for device in connected { stopAudioFeed(for: device); device.activeEffectType = nil }
+    /// Toggle screen-sync for the selected light (drives its sampler toward its
+    /// own display). Other lights keep whatever mode they were in.
+    func setSync(_ on: Bool) {
+        guard let device = selectedDevice else { return }
+        setSync(on, for: device)
+    }
+
+    /// Toggle screen-sync for a specific light.
+    func setSync(_ on: Bool, for device: LightDevice) {
+        if on {
+            startSampler(for: device)
+            device.syncEnabled = true
+        } else {
+            stopSampler(for: device)
+            device.syncEnabled = false
+        }
+        persist(device)
+        objectWillChange.send()
+    }
+
+    /// Start mirroring for ONE light (called when its sync is turned on).
+    private func startSampler(for device: LightDevice) {
+        guard device.isConnected else { return }
+        // Sync overrides any static colour / effect on this light.
+        stopAudioFeed(for: device)
+        device.activeEffectType = nil
 
         if !CGPreflightScreenCaptureAccess() {
             NSLog("[Sync] no screen-capture permission; requesting")
             _ = CGRequestScreenCaptureAccess()
         }
 
-        for device in connected { startSampler(for: device) }
-        syncEnabled = true
-    }
-
-    private func startSampler(for device: LightDevice) {
         let s = ScreenColorSampler()
         s.fps = syncFPS
         let displayID = device.displayID ?? CGMainDisplayID()
@@ -541,7 +567,7 @@ final class AppModel: ObservableObject {
             DispatchQueue.main.async {
                 guard let device = device else { return }
                 let compress = self?.usbPowerOptimization ?? true
-                guard self?.syncEnabled ?? false else { return }
+                guard device.syncEnabled else { return }
                 let packed: [(r: UInt8, g: UInt8, b: UInt8)] = zones.map { z in
                     let c = (r: z.r, g: z.g, b: z.b)
                     return compress ? AppModel.compress(c) : c
@@ -568,16 +594,17 @@ final class AppModel: ObservableObject {
         }
     }
 
-    func stopSync() {
+    /// Stop mirroring for every light (e.g. on full disconnect).
+    func stopSyncAll() {
         for device in devices {
             if let s = device.sampler {
                 s.onZones = nil
                 Task { await s.stop() }
                 device.sampler = nil
             }
+            device.syncEnabled = false
             device.driver.endEffectOrSync()
         }
-        syncEnabled = false
     }
 
     private func removeSampler(for device: LightDevice) {
@@ -598,7 +625,7 @@ final class AppModel: ObservableObject {
         Task { [weak self, weak device] in
             try? await Task.sleep(nanoseconds: 150_000_000)
             await MainActor.run {
-                guard let self = self, let device = device, self.syncEnabled else { return }
+                guard let self = self, let device = device, device.syncEnabled else { return }
                 self.startSampler(for: device)
             }
         }
@@ -645,7 +672,7 @@ final class AppModel: ObservableObject {
 
         // 2) Restart samplers (SCStream dies across sleep) and 3) re-apply state.
         for device in devices where device.isConnected {
-            if syncEnabled {
+            if device.syncEnabled {
                 // restartSampler delays a moment so ScreenCaptureKit is ready
                 // after wake before we re-open capture.
                 restartSampler(for: device)

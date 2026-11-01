@@ -143,9 +143,10 @@ If Node lights the lamp but Swift doesn't → re-check the 5 requirements above.
 
 `AppModel` now holds `[LightDevice]` (new `LightDevice.swift`) instead of a
 single `driver` + `sampler`. Each `LightDevice` owns its own `HIDTransport`,
-`LightDriver`, `ScreenColorSampler`, `displayID`, and its **own** settings
-(hue, saturation, brightness, speed, sensitivity, direction, auto-off, last
-effect). Highlights:
+`LightDriver`, `ScreenColorSampler`, `displayID`, **its own per-light
+screen-sync toggle (`syncEnabled`)**, and its **own** settings (hue,
+saturation, brightness, speed, sensitivity, direction, auto-off, last effect).
+Highlights:
 
 - **`HIDTransport`** — added `enumerateEntries()` (each device + its live
   registry entry), `openSpecific(_:)` (open one specific entry, consuming the
@@ -156,19 +157,27 @@ effect). Highlights:
 - **`LightDriver`** — added `connectOnOpenedTransport()` (connect assuming the
   transport already opened a specific device) and `identityKey` (uuid-based).
 - **`AppModel`** — `connect()` (first free light), `connectAll()` (every
-  enumerated light), per-light `disconnect(_:)`; commands act on the
-  **selected** light (`selectedDevice`, `select(_:)`). The sync toggle is global
-  and starts **one sampler per connected light**, each toward that light's own
-  display with its own grid + direction; `setDisplay(_:for:)` restarts a single
-  light's sampler live. Hot-plug prunes only the removed light by locationID.
-- **Persistence** — per-light settings + display binding are stored as a JSON
-  map in `pref.perLightSettings`, keyed by `uuid:` (once reported) else
-  `loc:<locationID>`. First-run adopts the legacy `pref.selectedDisplayID`.
-- **UI** — SyncPage shows one **card per connected light** (name, LED count,
-  display dropdown, strip direction, disconnect). Color / Effects / Settings
-  pages gained a `LightPicker` header (shown only with ≥2 lights) and edit the
-  selected light. Header button is Connect / Disconnect all; footer shows the
-  connected-light count when >1. Single-light behavior is unchanged.
+  enumerated light), per-light `disconnect(_:)`; **all** pages operate on the
+  **selected** light (`selectedDevice`, `select(_:)`). **Screen-sync is
+  per-light**: `setSync(_:for:)` / `setSync(_:)` toggle `device.syncEnabled` and
+  start/stop that light's own sampler toward its own display. Choosing a static
+  colour (`applyColor`) or an effect (`applyEffect`) turns sync **off for that
+  selected light only** (other lights unaffected). `setDisplay(_:for:)` restarts
+  a single light's sampler live. Hot-plug prunes only the removed light by
+  locationID. `syncActive` is a convenience for the menu icon.
+- **Persistence** — per-light settings + display binding + `syncEnabled` are
+  stored as a JSON map in `pref.perLightSettings`, keyed by `uuid:` (once
+  reported) else `loc:<locationID>`. First-run adopts the legacy
+  `pref.selectedDisplayID`.
+- **UI** — the window **header** has a light **dropdown** (shown when ≥2 lights)
+  that selects which light *all* pages edit. SyncPage shows a per-light sync
+  toggle for the selected light, a sampling-FPS slider, and one **card per
+  connected light** (name, LED count, its own sync switch, display dropdown,
+  strip direction, disconnect). Color / Effects / Settings still show a small
+  `LightPicker` caption (read-only) so you know which light you're editing, and
+  their controls bind to the selected light. Header button is Connect /
+  Disconnect all; footer shows the connected-light count when >1. Single-light
+  behavior is unchanged.
 
 ## Wake-from-sleep refresh — DONE
 

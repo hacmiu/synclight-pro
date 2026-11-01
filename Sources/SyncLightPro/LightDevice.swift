@@ -4,9 +4,9 @@ import SwiftUI
 /// One physical light bound to one display, with its OWN settings + sampler.
 ///
 /// Multi-light design (Part C): each connected light is a self-contained
-/// controller. `AppModel` owns `[LightDevice]`; the Color/Effects/Settings pages
-/// operate on the *selected* light, while the sync toggle is global and drives
-/// every light's own sampler toward its own display.
+/// controller. `AppModel` owns `[LightDevice]`; **all** pages (Color / Effects /
+/// Sync / Settings) operate on the *selected* light, and each light has its own
+/// screen-sync toggle driving its own sampler toward its own display.
 ///
 /// This is a plain (non-observable) value-ish holder; `AppModel` republishes
 /// changes by mutating its `@Published var devices`.
@@ -48,7 +48,10 @@ final class LightDevice: Identifiable {
     var lastEffectType: UInt8?
     var lastEffectIndex: UInt8?
 
-    /// Per-light screen sampler (only present while global sync is running).
+    /// Whether THIS light is currently mirroring its display (per-light sync).
+    var syncEnabled: Bool = false
+
+    /// Per-light screen sampler (only present while this light's sync is on).
     var sampler: ScreenColorSampler?
     /// Thread-safe mirror flag read from the sampler's capture queue.
     let mirrorBox = AtomicBool(false)

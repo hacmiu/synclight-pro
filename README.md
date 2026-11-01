@@ -9,7 +9,8 @@ original Electron app.
 ## Features
 - Connect to the USB light over HID (`0x1A86:0xFE07`)
 - **Multi-light** — drive several bars at once; each light has its **own**
-  settings, effects, auto-off and **its own target monitor**
+  settings, effects, auto-off, **its own screen-sync toggle**, and **its own
+  target monitor**. A dropdown in the header picks which light the pages edit.
 - Static color, custom picker, brightness
 - Effects (rainbow / breathing / flow / comet / music …) with speed & sound sensitivity
 - Real-time **screen sync** (ambilight) via ScreenCaptureKit, wrapping all four screen edges
@@ -65,12 +66,16 @@ Security → Screen Recording).
 ## Usage
 
 1. Plug in one or more lights, open the app, click **Connect** (or **Connect all**).
-2. **Color** tab — pick a color / brightness (for the selected light; use the
-   light picker at the top when several are connected).
+   With 2+ lights, pick the active one from the **dropdown in the header**.
+2. **Color** tab — pick a color / brightness (applies to the selected light).
 3. **Effects** tab — choose a dynamic or sound-pickup effect for the selected light.
-4. **Sync** tab — enable ambilight (global), set FPS, then **assign a display to
-   each light** and flip strip direction per card.
+4. **Sync** tab — turn on screen-sync for the selected light (each light syncs
+   its own monitor independently). Set FPS, then **assign a display to each light**
+   and flip strip direction per card.
 5. **Settings** — language, per-light auto-off, USB power optimization, start on boot.
+
+> Picking a static colour or an effect automatically turns **screen-sync off for
+> that light only** (the others keep mirroring).
 
 ## Project layout
 
