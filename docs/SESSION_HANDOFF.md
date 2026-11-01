@@ -11,8 +11,10 @@ The app is **feature-complete and usable**: connect + color + brightness +
 effects + off + **screen ambilight** + **sound-pickup** all work on real
 hardware, with a **cyberpunk UI**, **USB Power Optimization**, **Start on boot**,
 a **bundled app icon**, an **adaptive LED grid** (any strip length),
-**monitor selection**, and **multi-light control** (several lights, each bound to
-its own display with its own settings/effects). Remaining work is BLE.
+**monitor selection**, and **multi-light control** (several lights, each with its
+own settings/effects/auto-off, its own screen-sync toggle and its own display;
+an "apply to all lights" mode). **Current version: v1.1** (see `CHANGELOG.md`).
+Remaining work is BLE.
 
 ---
 
@@ -229,10 +231,12 @@ frozen. Fix:
    (`applyEffect(type:index:)` → `setLedEffect`, action 133). Confirm each entry
    maps to the intended on-device effect; adjust `type`/`index` if a device
    disagrees.
-3. **Multi-light polish** — e.g. reorderable/renamable lights, an optional
-   "apply to all lights" shortcut, per-light screen-sync FPS. Not started.
+3. **Multi-light polish** — e.g. reorderable/renamable lights, per-light
+   screen-sync FPS. (A basic "apply to all lights" mode is DONE; per-light FPS
+   is not.)
 4. **Cleanup:** remove debug `probe*.swift` scripts once satisfied.
-5. **Packaging:** proper `Info.plist` versioning, notarized release.
+5. **Packaging:** proper `Info.plist` versioning (now 1.1 via
+   `CFBundleShortVersionString`), notarized release.
 
 ---
 

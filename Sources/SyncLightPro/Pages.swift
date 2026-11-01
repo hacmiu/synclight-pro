@@ -501,7 +501,7 @@ struct SettingsPage: View {
                 Image(systemName: "info.circle").foregroundStyle(Cyber.textDim)
                 Text(l.about).font(.system(.callout, design: .monospaced)).foregroundStyle(Cyber.text)
                 Spacer()
-                Text("\(l.version) 1.0.0").font(.system(.caption, design: .monospaced)).foregroundStyle(Cyber.textDim)
+                Text("\(l.version) 1.1").font(.system(.caption, design: .monospaced)).foregroundStyle(Cyber.textDim)
             }
         }
     }

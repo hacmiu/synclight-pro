@@ -14,7 +14,7 @@ original Electron app.
   and an **"All lights"** switch applies a change to every connected light at
   once.
 - Static color, custom picker, brightness
-- Effects (rainbow / breathing / flow / comet / music …) with speed & sound sensitivity
+- Effects (rainbow / breathing / flow / comet / music …) with speed, sound sensitivity & brightness
 - Real-time **screen sync** (ambilight) via ScreenCaptureKit, wrapping all four screen edges
 - **Multi-monitor aware** — pick which display each strip mirrors
 - **Adapts to any strip length / LED count** (sampling grid derived from the
@@ -110,6 +110,7 @@ Security → Screen Recording).
 ```
 
 ## Documentation
+- [`CHANGELOG.md`](CHANGELOG.md) — version history (current: **v1.1**)
 - [`docs/README.md`](docs/README.md) — architecture & data flow
 - [`docs/SESSION_HANDOFF.md`](docs/SESSION_HANDOFF.md) — current state & roadmap
 - [`docs/DEV_NOTES.md`](docs/DEV_NOTES.md) — HID transport gotchas & testing
@@ -117,11 +118,14 @@ Security → Screen Recording).
 
 ## Status
 
-Core control (connect, color, brightness, effects, off) and screen ambilight are
-verified on hardware. The sampling grid adapts to the device's LED count and the
-selected monitor. **Multiple USB HID lights** are supported (each with its own
-settings/effects and its own target display); BLE / dongle / serial not supported
-yet. See [`docs/SESSION_HANDOFF.md`](docs/SESSION_HANDOFF.md) for the roadmap.
+**v1.1** — core control (connect, color, brightness, effects, off) and screen
+ambilight are verified on hardware. The sampling grid adapts to the device's LED
+count and the selected monitor. **Multiple USB HID lights** are supported (each
+with its own settings/effects/auto-off, its own screen-sync toggle and its own
+target display) plus an **apply-to-all** mode; the app now survives sleep/wake.
+BLE / dongle / serial not supported yet. See
+[`CHANGELOG.md`](CHANGELOG.md) and
+[`docs/SESSION_HANDOFF.md`](docs/SESSION_HANDOFF.md) for details.
 
 ## Disclaimer
 
