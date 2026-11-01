@@ -238,6 +238,13 @@ struct EffectsPage: View {
                         set: { model.setSoundSensitivity($0) }
                     ), range: 5...100)
                 }
+
+                // Brightness works while an effect runs (the driver re-issues the
+                // effect frame so the device commits the new level).
+                sliderRow(icon: "sun.max", title: l.brightness, value: Binding(
+                    get: { device.brightness },
+                    set: { model.setBrightness($0) }
+                ), range: 0...100, unit: "%", tint: Cyber.yellow)
             }
         }
     }
@@ -251,16 +258,17 @@ struct EffectsPage: View {
                 "circle.hexagongrid", "bolt.fill", "star.fill"][idx]
     }
 
-    private func sliderRow(icon: String, title: String, value: Binding<Double>, range: ClosedRange<Double>) -> some View {
+    private func sliderRow(icon: String, title: String, value: Binding<Double>, range: ClosedRange<Double>,
+                           unit: String = "", tint: Color = Cyber.cyan) -> some View {
         VStack(alignment: .leading, spacing: 8) {
             HStack {
-                Image(systemName: icon).foregroundStyle(Cyber.cyan)
+                Image(systemName: icon).foregroundStyle(tint)
                 Text(title).font(.system(.callout, design: .monospaced).weight(.semibold)).foregroundStyle(Cyber.text)
                 Spacer()
-                Text("\(Int(value.wrappedValue))").font(.system(.callout, design: .monospaced)).foregroundStyle(Cyber.cyan)
+                Text("\(Int(value.wrappedValue))\(unit)").font(.system(.callout, design: .monospaced)).foregroundStyle(tint)
             }
             Slider(value: value, in: range)
-                .tint(Cyber.cyan)
+                .tint(tint)
         }
     }
 }
