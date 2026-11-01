@@ -108,6 +108,11 @@ final class HIDTransport {
     private var device: IOHIDDevice?
     private let seqGen = SequenceGenerator()
 
+    /// Registry location id of the currently-open device (0 if none). Lets us
+    /// re-open the SAME physical light after sleep/wake instead of whatever
+    /// happens to be first.
+    private(set) var locationID: Int = 0
+
     private let lock = NSLock()
     private var lastResponse: [UInt8] = []
     private var readBuffer: [UInt8] = []
@@ -148,6 +153,7 @@ final class HIDTransport {
             return false
         }
         device = dev
+        locationID = matched.info.locationID
         shouldStop = false
 
         // Custom run-loop mode unique to this device (hidapi equivalent).
@@ -202,6 +208,38 @@ final class HIDTransport {
         device = nil
         runLoopRef = nil
         runLoopThread = nil
+    }
+
+    /// Best-effort liveness probe for the currently-open device.
+    ///
+    /// After sleep/wake (or a USB reset) the IOHIDDevice handle can be silently
+    /// invalidated by IOKit: writes return success but do nothing, and input
+    /// reports stop. We detect that by (a) confirming a handle exists and (b)
+    /// checking the device is still present in the live registry with the same
+    /// location. A cheap 1-byte input-report query is not reliable across
+    /// devices, so the registry check is the primary signal.
+    var isAlive: Bool {
+        guard device != nil else { return false }
+        guard locationID != 0 else { return true } // can't verify; assume ok
+        let present = Self.enumerate().contains { $0.locationID == locationID }
+        return present
+    }
+
+    /// Close and re-open the SAME physical light (by registry location) after
+    /// sleep/wake. Returns true on success. Falls back to false if the device
+    /// is gone (caller then treats the light as disconnected).
+    @discardableResult
+    func reopen() -> Bool {
+        let loc = locationID
+        close()
+        guard loc != 0 else { return false }
+        let entries = Self.enumerateEntries()
+        guard let match = entries.first(where: { $0.info.locationID == loc }) else {
+            for e in entries { Self.releaseEntry(for: e) }
+            return false
+        }
+        for e in entries where e.entry != match.entry { Self.releaseEntry(for: e) }
+        return openSpecific(match)
     }
 
     // MARK: - Input reports

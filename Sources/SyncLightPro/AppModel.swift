@@ -1,5 +1,6 @@
 import Foundation
 import SwiftUI
+import AppKit
 import ServiceManagement
 
 /// Observable app state bridging UI and device/screen subsystems.
@@ -56,6 +57,9 @@ final class AppModel: ObservableObject {
 
     private var audioMeters: [UUID: SystemAudioMeter] = [:]
     private var hotPlug: HotPlugMonitor?
+    /// Guard so hot-plug callbacks (which also fire on wake re-enumeration)
+    /// don't race with handleWake()'s own reopen logic.
+    private var handlingWake = false
 
     var l10n: L10n { L10n(lang: language) }
 
@@ -64,7 +68,27 @@ final class AppModel: ObservableObject {
     init() {
         restoreSettings()
         setupHotPlug()
+        setupWakeObserver()
     }
+
+    /// Observe system wake so we can refresh HID handles + restart samplers,
+    /// which otherwise die across sleep and make the app look frozen.
+    private var wakeObservers: [NSObjectProtocol] = []
+
+    private func setupWakeObserver() {
+        let center = NSWorkspace.shared.notificationCenter
+        let handler: @Sendable (Notification) -> Void = { [weak self] _ in
+            // Hop to the main actor; don't touch self on the notifier thread.
+            Task { @MainActor [weak self] in self?.handleWake() }
+        }
+        wakeObservers.append(center.addObserver(forName: NSWorkspace.didWakeNotification,
+                                                 object: nil, queue: .main, using: handler))
+        wakeObservers.append(center.addObserver(forName: NSWorkspace.screensDidWakeNotification,
+                                                 object: nil, queue: .main, using: handler))
+    }
+
+    // NOTE: no deinit — AppModel lives for the whole app lifetime and its
+    // block observers keep only a weak reference to self, so this is not a leak.
 
     // MARK: - UserDefaults helpers
 
@@ -178,6 +202,9 @@ final class AppModel: ObservableObject {
 
     private func handleHotPlug(present: Bool) {
         if present {
+            // Ignore add-events while a wake refresh is in flight — handleWake()
+            // re-opens the same lights itself and reconnecting here would race.
+            if handlingWake { return }
             if hasUsedLight { tryAutoReconnectMissing() }
         } else {
             pruneDisconnectedLights()
@@ -575,6 +602,82 @@ final class AppModel: ObservableObject {
                 self.startSampler(for: device)
             }
         }
+    }
+
+    // MARK: - Wake from sleep
+
+    /// Called when the Mac wakes from sleep. After sleep the HID handles and
+    /// ScreenCaptureKit streams can be dead (writes silently no-op, capture
+    /// stops feeding frames) which made the app appear frozen. We:
+    ///   1. re-open any HID device whose handle is no longer alive,
+    ///   2. restart every sampler (SCStream does not survive sleep),
+    ///   3. re-apply each light's current colour/effect so the strip is correct.
+    /// Lights whose hardware truly went away are torn down.
+    func handleWake() {
+        guard !handlingWake else { return }
+        handlingWake = true
+        defer {
+            // Brief grace period: let any in-flight hot-plug add-events that were
+            // queued during wake settle before we re-enable auto-reconnect.
+            Task { @MainActor [weak self] in
+                try? await Task.sleep(nanoseconds: 1_500_000_000)
+                self?.handlingWake = false
+            }
+        }
+        NSLog("[Wake] refreshing lights after sleep")
+        let connected = devices.filter { $0.isConnected }
+        guard !connected.isEmpty else { return }
+
+        for device in connected {
+            // 1) Re-open the HID handle if IOKit invalidated it during sleep.
+            if !device.transport.isAlive {
+                if device.transport.reopen() {
+                    NSLog("[Wake] reopened HID for \(device.displayName)")
+                } else {
+                    NSLog("[Wake] HID gone for \(device.displayName); dropping it")
+                    teardownLight(device)
+                    continue
+                }
+            }
+        }
+        // Remove any lights we just dropped.
+        devices.removeAll { !$0.isConnected }
+
+        // 2) Restart samplers (SCStream dies across sleep) and 3) re-apply state.
+        for device in devices where device.isConnected {
+            if syncEnabled {
+                // restartSampler delays a moment so ScreenCaptureKit is ready
+                // after wake before we re-open capture.
+                restartSampler(for: device)
+            } else {
+                removeSampler(for: device)
+                reapplyCurrentState(for: device)
+            }
+        }
+        objectWillChange.send()
+    }
+
+    /// Re-push the light's current colour/effect/brightness to the hardware
+    /// (used after wake when not syncing, when no sampler drives it).
+    private func reapplyCurrentState(for device: LightDevice) {
+        if let type = device.activeEffectType {
+            device.driver.setSoundSensitivity(UInt8(device.soundSensitivity))
+            if type == 2 { device.driver.setDynamicSpeed(UInt8(100 - device.dynamicSpeed)) }
+            let rgb = AppModel.compressIfNeeded(device.color.toRGB(), usbPowerOptimization)
+            device.driver.setColor(r: rgb.r, g: rgb.g, b: rgb.b)
+            device.driver.setLedEffect(type: type, index: device.lastEffectIndex ?? 0)
+            if type == 3 {
+                // Sound-pickup: the audio meter (ScreenCaptureKit) also dies
+                // across sleep, so re-create the feed.
+                device.driver.setComputerRhythm(1)
+                startAudioFeed(for: device)
+            }
+        } else {
+            let rgb = AppModel.compressIfNeeded(device.color.toRGB(), usbPowerOptimization)
+            device.driver.endEffectOrSync()
+            device.driver.setColor(r: rgb.r, g: rgb.g, b: rgb.b)
+        }
+        device.driver.setBrightness(UInt8(max(0, min(255, (device.brightness / 100.0 * 255.0).rounded()))))
     }
 
     // MARK: - Grid helpers

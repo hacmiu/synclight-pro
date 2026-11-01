@@ -137,6 +137,7 @@ If Node lights the lamp but Swift doesn't → re-check the 5 requirements above.
   display; `AppModel.selectedDisplayID` (persisted) + SyncPage dropdown +
   `restartSync()` on change. (`availableDisplays()` lists screens, main first.)
 - ✅ **Multi-light control (Part C)** — see the section below.
+- ✅ **Wake-from-sleep refresh** — HID reopen + sampler/audio restart on wake.
 
 ## Multi-light control (Part C) — DONE
 
@@ -168,6 +169,28 @@ effect). Highlights:
   pages gained a `LightPicker` header (shown only with ≥2 lights) and edit the
   selected light. Header button is Connect / Disconnect all; footer shows the
   connected-light count when >1. Single-light behavior is unchanged.
+
+## Wake-from-sleep refresh — DONE
+
+After sleep, IOKit can silently invalidate the `IOHIDDevice` handle (writes
+return success but do nothing, input reports stop) and ScreenCaptureKit streams
+(`SCStream` for ambilight + the audio meter) die — which made the app look
+frozen. Fix:
+
+- **`AppModel`** observes `NSWorkspace.didWakeNotification` +
+  `screensDidWakeNotification` (`setupWakeObserver`, `@Sendable` handler hops to
+  the main actor) and calls **`handleWake()`**, which:
+  1. re-opens any light whose `HIDTransport.isAlive` is false via
+     `HIDTransport.reopen()` (same registry `locationID`); lights that are truly
+     gone are torn down,
+  2. restarts each light's sampler (via `restartSampler`, small delay so
+     ScreenCaptureKit is ready) when syncing, else re-applies the current
+     colour/effect (`reapplyCurrentState`) and re-creates the sound-pickup audio
+     feed if a type-3 effect was active.
+- **`HIDTransport`** gained `locationID` (set on open), `isAlive` (registry
+  presence check for the same location) and `reopen()`.
+- **Race guard:** `handlingWake` blocks hot-plug add-events for ~1.5 s so the
+  wake refresh isn't raced by a `connectAll()` from the re-enumeration.
 
 ## REMAINING (roadmap)
 
